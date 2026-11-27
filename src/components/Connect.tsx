@@ -113,7 +113,7 @@ export const Connect = observer(function Connect() {
                 )}
 
                 <PrimaryButton
-                    iconProps={{ iconName: "AddCircle" }}
+                    iconProps={{ iconName: "Add" }}
                     text={t.add}
                     disabled={busy}
                     onClick={handleAdd}

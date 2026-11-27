@@ -35,7 +35,8 @@ const dict = {
             logcat: "日志 Logcat",
             install: "安装 APK",
             privilege: "权限与挂载",
-            power: "电源与WiFi",
+            power: "电源菜单",
+            wifiAdb: "WiFi ADB",
         },
 
         upload: "上传",
@@ -159,6 +160,10 @@ const dict = {
             "暂无日志。请点击「开始」，并确认应用的日志等级已勾选（默认显示 Debug 及以上）。",
 
         powerTitle: "电源与设备控制",
+        powerGroupReboot: "重启与关机",
+        powerGroupScreen: "屏幕控制",
+        powerRebootHint:
+            "注意：重启 / 关机 / 重启到 Recovery 或 Bootloader 都会断开当前 USB 连接，属于正常现象；设备重新启动后需要重新点击「连接」。",
         reboot: "重启",
         rebootRecovery: "重启到 Recovery",
         rebootBootloader: "重启到 Bootloader",
@@ -171,11 +176,17 @@ const dict = {
         sleep: "息屏",
         wifiAdbTitle: "ADB over WiFi",
         wifiAdbHint:
-            "① 先用 USB 连接设备；② 点「开启 TCPIP」让设备监听端口；③ 点「读取设备 IP」获取地址。得到 IP:端口后，可在本机命令行用 adb connect 连接（浏览器出于安全限制无法直接建立 TCP 连接）。",
+            "把 USB 连接切换为 WiFi 连接，摆脱数据线束缚。前提：先用 USB 连上设备，且手机与电脑处于同一局域网。",
+        wifiStep1: "第 1 步：让设备监听 TCP 端口",
+        wifiStep2: "第 2 步：读取设备 IP 地址",
+        wifiStep3: "第 3 步：在本机命令行连接",
+        wifiConnectHint:
+            "浏览器出于安全限制无法直接建立 TCP 连接，因此实际的 WiFi 连接需要在本机命令行执行（把 <IP> 换成上一步得到的地址）：adb connect <IP>:5555 。连接成功后即可拔掉数据线，用 adb 命令操作设备。再次用 USB 时需要执行 adb usb 恢复。",
         wifiPort: "端口",
         enableTcpip: "开启 TCPIP",
         readIp: "读取设备 IP",
         deviceIp: "设备地址（IP:端口）",
+        copy: "复制",
 
         screenshotForbidden: "该应用禁止了截屏（FrameBuffer 不可用），请切换到桌面后重试。",
 
@@ -232,7 +243,8 @@ const dict = {
             logcat: "Logcat",
             install: "Install APK",
             privilege: "Privilege & Mount",
-            power: "Power & WiFi",
+            power: "Power Menu",
+            wifiAdb: "WiFi ADB",
         },
 
         upload: "Upload",
@@ -358,6 +370,10 @@ const dict = {
             "No logs yet. Click Start and make sure at least one level is enabled (Debug and above by default).",
 
         powerTitle: "Power & Device Control",
+        powerGroupReboot: "Reboot & Power",
+        powerGroupScreen: "Screen Control",
+        powerRebootHint:
+            "Note: reboot / power off / reboot to recovery or bootloader will drop the current USB connection. This is expected — reconnect after the device boots.",
         reboot: "Reboot",
         rebootRecovery: "Reboot to Recovery",
         rebootBootloader: "Reboot to Bootloader",
@@ -370,11 +386,17 @@ const dict = {
         sleep: "Sleep",
         wifiAdbTitle: "ADB over WiFi",
         wifiAdbHint:
-            "① Connect via USB; ② click Enable TCPIP so the device listens on a port; ③ click Read device IP. Then use `adb connect <ip>:<port>` from your terminal (browsers cannot open raw TCP connections for security reasons).",
+            "Switch from USB to a WiFi connection and get rid of the cable. Prerequisite: connect via USB first, and make sure the phone and computer are on the same LAN.",
+        wifiStep1: "Step 1: make the device listen on a TCP port",
+        wifiStep2: "Step 2: read the device IP address",
+        wifiStep3: "Step 3: connect from your terminal",
+        wifiConnectHint:
+            "Browsers cannot open raw TCP connections for security reasons, so the actual WiFi connection is made from your terminal (replace <IP> with the address from the previous step): adb connect <IP>:5555 . Once connected you can unplug the cable and keep using adb. Run adb usb to switch back to USB.",
         wifiPort: "Port",
         enableTcpip: "Enable TCPIP",
         readIp: "Read device IP",
         deviceIp: "Device address (IP:port)",
+        copy: "Copy",
 
         screenshotForbidden:
             "This app blocks screenshots (FrameBuffer unavailable). Try again from the home screen.",

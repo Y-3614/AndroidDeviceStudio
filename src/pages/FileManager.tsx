@@ -28,6 +28,7 @@ import {
     type FsEntry,
 } from "../state/fs";
 import { saveBlob } from "../state/file-stream";
+import { extensionOf, iconNameForExtension } from "../state/file-icons";
 import { privilege } from "../state/privilege";
 
 /** 拼接远程路径 */
@@ -69,15 +70,28 @@ export const FileManagerPage = observer(function FileManagerPage() {
             {
                 key: "type",
                 name: t.colFileType,
-                minWidth: 24,
-                maxWidth: 24,
+                minWidth: 28,
+                maxWidth: 28,
                 isIconOnly: true,
-                onRender: (item: FsEntry) => (
-                    <Icon
-                        iconName={isDirectory(item.type) ? "FolderFill" : "Page"}
-                        styles={{ root: { fontSize: 20, color: "#0078d4" } }}
-                    />
-                ),
+                onRender: (item: FsEntry) => {
+                    // 目录用文件夹图标，文件按扩展名映射（纯离线字体图标）
+                    const name = isDirectory(item.type)
+                        ? "FolderFill"
+                        : iconNameForExtension(extensionOf(item.name));
+                    return (
+                        <Icon
+                            iconName={name}
+                            styles={{
+                                root: {
+                                    fontSize: 18,
+                                    color: isDirectory(item.type)
+                                        ? "#0078d4"
+                                        : "#605e5c",
+                                },
+                            }}
+                        />
+                    );
+                },
             },
             {
                 key: "name",
@@ -122,7 +136,7 @@ export const FileManagerPage = observer(function FileManagerPage() {
                   {
                       key: "upload",
                       text: t.upload,
-                      iconProps: { iconName: "CloudArrowUp" },
+                      iconProps: { iconName: "Upload" },
                       disabled: !connection.isConnected,
                       onClick: () => {
                           handleUpload();
@@ -131,7 +145,7 @@ export const FileManagerPage = observer(function FileManagerPage() {
                   {
                       key: "uploadFolder",
                       text: t.uploadFolder,
-                      iconProps: { iconName: "FolderHorizontal" },
+                      iconProps: { iconName: "FolderOpen" },
                       disabled: !connection.isConnected,
                       onClick: () => {
                           handleUploadFolder();
@@ -160,7 +174,7 @@ export const FileManagerPage = observer(function FileManagerPage() {
                   {
                       key: "download",
                       text: t.download,
-                      iconProps: { iconName: "CloudArrowDown" },
+                      iconProps: { iconName: "Download" },
                       onClick: () => {
                           void handleDownload();
                       },

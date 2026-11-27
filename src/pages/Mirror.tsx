@@ -161,7 +161,7 @@ export const MirrorPage = observer(function MirrorPage() {
                 )}
                 <DefaultButton
                     text={recording ? t.recordStop : t.recordStart}
-                    iconProps={{ iconName: "Record" }}
+                    iconProps={{ iconName: "Video" }}
                     onClick={toggleRecord}
                     disabled={!running}
                 />

@@ -9,17 +9,23 @@ interface RouteDef {
     labelKey: keyof typeof i18n.t.nav;
 }
 
+/**
+ * 左侧导航。
+ * 注意：图标名必须存在于 Fluent UI MDL2 图标集中
+ * （不存在的名字会渲染成空白，之前正是踩了这个坑）。
+ */
 const ROUTES: RouteDef[] = [
-    { key: "readme", icon: "Bookmark", labelKey: "readme" },
+    { key: "readme", icon: "Bookmarks", labelKey: "readme" },
     { key: "device-info", icon: "Phone", labelKey: "deviceInfo" },
     { key: "file-manager", icon: "Folder", labelKey: "fileManager" },
     { key: "privilege", icon: "Shield", labelKey: "privilege" },
     { key: "power", icon: "PowerButton", labelKey: "power" },
+    { key: "wifi-adb", icon: "NetworkTower", labelKey: "wifiAdb" },
     { key: "terminal", icon: "CommandPrompt", labelKey: "terminal" },
-    { key: "mirror", icon: "PhoneLaptop", labelKey: "mirror" },
+    { key: "mirror", icon: "Devices2", labelKey: "mirror" },
     { key: "screen-capture", icon: "Camera", labelKey: "screenCapture" },
-    { key: "logcat", icon: "BookSearch", labelKey: "logcat" },
-    { key: "install", icon: "Box", labelKey: "install" },
+    { key: "logcat", icon: "Articles", labelKey: "logcat" },
+    { key: "install", icon: "Package", labelKey: "install" },
 ];
 
 export const Nav = observer(function Nav({ current }: { current: Route }) {

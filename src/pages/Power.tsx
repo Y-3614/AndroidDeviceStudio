@@ -5,7 +5,6 @@ import {
     PrimaryButton,
     Separator,
     Stack,
-    TextField,
 } from "@fluentui/react";
 import { observer } from "mobx-react-lite";
 import { useState } from "react";
@@ -19,8 +18,6 @@ export const PowerPage = observer(function PowerPage() {
     const [busy, setBusy] = useState<string | undefined>();
     const [message, setMessage] = useState<string | undefined>();
     const [error, setError] = useState<string | undefined>();
-    const [wifiPort, setWifiPort] = useState("5555");
-    const [wifiIp, setWifiIp] = useState<string | undefined>();
 
     const run = async (label: string, fn: () => Promise<unknown>) => {
         setBusy(label);
@@ -36,19 +33,9 @@ export const PowerPage = observer(function PowerPage() {
         }
     };
 
-    /** 执行一条 shell 命令（无输出要求） */
     const sh = (cmd: string) => {
         if (!adb) return Promise.resolve("");
         return shell(adb, cmd);
-    };
-
-    /** 读取设备 WiFi IP */
-    const readIp = async () => {
-        if (!adb) return;
-        const out = await shell(adb, "ip route");
-        // 形如 "192.168.1.5 dev wlan0 ..."
-        const m = out.match(/src\s+(\d+\.\d+\.\d+\.\d+)/);
-        setWifiIp(m?.[1]);
     };
 
     if (!adb) {
@@ -65,7 +52,7 @@ export const PowerPage = observer(function PowerPage() {
                 {t.powerTitle}
             </h2>
 
-            {message && <MessageBar>{message}</MessageBar>}
+            {message && <MessageBar messageBarType={MessageBarType.success}>{message}</MessageBar>}
             {error && (
                 <MessageBar messageBarType={MessageBarType.error} isMultiline>
                     {error}
@@ -73,6 +60,9 @@ export const PowerPage = observer(function PowerPage() {
             )}
 
             {/* 重启 / 关机 */}
+            <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>
+                {t.powerGroupReboot}
+            </h3>
             <Stack horizontal tokens={{ childrenGap: 8 }} wrap>
                 <PrimaryButton
                     text={t.reboot}
@@ -98,15 +88,16 @@ export const PowerPage = observer(function PowerPage() {
                     text={t.powerOff}
                     iconProps={{ iconName: "PowerButton" }}
                     disabled={!!busy}
-                    onClick={() =>
-                        run(t.powerOff, () => sh("reboot -p"))
-                    }
+                    onClick={() => run(t.powerOff, () => sh("reboot -p"))}
                 />
             </Stack>
 
             <Separator />
 
             {/* 屏幕控制 */}
+            <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>
+                {t.powerGroupScreen}
+            </h3>
             <Stack horizontal tokens={{ childrenGap: 8 }} wrap>
                 <DefaultButton
                     text={t.screenOff}
@@ -130,57 +121,17 @@ export const PowerPage = observer(function PowerPage() {
                     text={t.powerDialog}
                     iconProps={{ iconName: "More" }}
                     disabled={!!busy}
-                    onClick={() => run(t.powerDialog, () => sh("input keyevent 26 --longpress"))}
-                />
-            </Stack>
-
-            <Separator />
-
-            {/* ADB over WiFi */}
-            <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
-                {t.wifiAdbTitle}
-            </h3>
-            <MessageBar messageBarType={MessageBarType.info} isMultiline>
-                {t.wifiAdbHint}
-            </MessageBar>
-
-            <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="end" wrap>
-                <TextField
-                    label={t.wifiPort}
-                    value={wifiPort}
-                    onChange={(_, v) => setWifiPort(v ?? "5555")}
-                    styles={{ root: { width: 120 } }}
-                />
-                <DefaultButton
-                    text={t.enableTcpip}
-                    iconProps={{ iconName: "Wireless" }}
-                    disabled={!!busy}
                     onClick={() =>
-                        run(t.enableTcpip, () =>
-                            adb.createSocketAndWait(`tcpip:${wifiPort}`),
+                        run(t.powerDialog, () =>
+                            sh("input keyevent --longpress 26"),
                         )
                     }
                 />
-                <DefaultButton
-                    text={t.readIp}
-                    iconProps={{ iconName: "Globe" }}
-                    disabled={!!busy}
-                    onClick={() =>
-                        run(t.readIp, async () => {
-                            await readIp();
-                        })
-                    }
-                />
             </Stack>
 
-            {wifiIp && (
-                <TextField
-                    label={t.deviceIp}
-                    value={`${wifiIp}:${wifiPort}`}
-                    readOnly
-                    styles={{ root: { maxWidth: 260 } }}
-                />
-            )}
+            <MessageBar messageBarType={MessageBarType.info} isMultiline>
+                {t.powerRebootHint}
+            </MessageBar>
         </Stack>
     );
 });

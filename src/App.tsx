@@ -14,6 +14,7 @@ import { PrivilegePage } from "./pages/Privilege";
 import { ReadmePage } from "./pages/Readme";
 import { ScreenCapturePage } from "./pages/ScreenCapture";
 import { TerminalPage } from "./pages/Terminal";
+import { WifiAdbPage } from "./pages/WifiAdb";
 import { useRoute } from "./state/router";
 
 const titleStyle = {
@@ -65,6 +66,9 @@ export const App = observer(function App() {
             break;
         case "power":
             page = <PowerPage />;
+            break;
+        case "wifi-adb":
+            page = <WifiAdbPage />;
             break;
         default:
             page = <ReadmePage />;

@@ -121,7 +121,7 @@ export const InstallPage = observer(function InstallPage() {
 
             <DefaultButton
                 text={t.chooseApk}
-                iconProps={{ iconName: "Box" }}
+                iconProps={{ iconName: "Package" }}
                 disabled={installing}
                 onClick={chooseApk}
             />
