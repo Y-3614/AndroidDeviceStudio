@@ -13,16 +13,24 @@ import type { IDisposable } from "@xterm/xterm";
 export const TerminalPage = observer(function TerminalPage() {
     const t = i18n.t;
     /**
-     * 用 state 保存容器节点。
-     *
-     * 关键：容器 div 只在「已连接」时才渲染，所以不能再用
-     * 「挂载时初始化 xterm」那种写法（容器还没出现，term.open 拿不到节点）。
-     * 改为容器就绪后再创建终端。
+     * 用 state 保存容器节点：容器 div 只在「已连接」时才渲染，
+     * 不能再用「挂载时初始化 xterm」的写法（容器还没出现，term.open 拿不到节点）。
      */
     const [container, setContainer] = useState<HTMLDivElement | null>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitRef = useRef<FitAddon | null>(null);
     const [rootShell, setRootShell] = useState(false);
+
+    /**
+     * 终端尺寸同步函数（由会话 effect 注册）。
+     *
+     * 关键：设备端 PTY 必须知道自己有多少行多少列，否则 `ls` 之类的命令
+     * 会按错误的宽度排版，显示成一团乱 —— 这正是之前终端错乱的根因。
+     * 这里把 xterm 的 cols/rows 实时推给设备端 PTY。
+     */
+    const syncSizeRef = useRef<((rows: number, cols: number) => void) | null>(
+        null,
+    );
 
     // ① 容器就绪 → 创建并挂载 xterm
     useEffect(() => {
@@ -51,24 +59,29 @@ export const TerminalPage = observer(function TerminalPage() {
         termRef.current = term;
         fitRef.current = fit;
 
-        const onResize = () => {
+        // 尺寸变化 → 通知设备端 PTY（resize / stty）
+        const sizeSub: IDisposable = term.onResize(({ rows, cols }) => {
+            syncSizeRef.current?.(rows, cols);
+        });
+
+        const doFit = () => {
             try {
                 fit.fit();
             } catch {
                 /* ignore */
             }
         };
-        window.addEventListener("resize", onResize);
-        // 容器自身尺寸变化（侧栏折叠等）也自适应
+        window.addEventListener("resize", doFit);
         const ro =
             typeof ResizeObserver !== "undefined"
-                ? new ResizeObserver(onResize)
+                ? new ResizeObserver(doFit)
                 : undefined;
         ro?.observe(container);
 
         return () => {
-            window.removeEventListener("resize", onResize);
+            window.removeEventListener("resize", doFit);
             ro?.disconnect();
+            sizeSub.dispose();
             term.dispose();
             termRef.current = null;
             fitRef.current = null;
@@ -84,8 +97,7 @@ export const TerminalPage = observer(function TerminalPage() {
         /*
          * 每个 effect 实例使用自己的闭包变量，彻底避免竞态：
          * 旧实现把 controller 存在 ref 里，新会话会覆盖它，
-         * 导致旧会话的 pipeTo 绑到了新 signal 上而无法中止 ——
-         * 结果两个 shell 同时往同一个终端写，显示错乱。
+         * 导致旧会话的 pipeTo 绑到了新 signal 上而无法中止。
          */
         let disposed = false;
         const abort = new AbortController();
@@ -108,21 +120,62 @@ export const TerminalPage = observer(function TerminalPage() {
 
         void (async () => {
             try {
-                const s = await adb.subprocess.noneProtocol.pty(command);
-                // 若期间已切换/卸载，丢弃这个会话
-                if (disposed) {
-                    try {
-                        s.kill();
-                    } catch {
-                        /* ignore */
+                let output: ReadableStream<Uint8Array>;
+                let syncSize: (rows: number, cols: number) => void;
+                const svc = adb.subprocess.shellProtocol;
+
+                if (svc?.isSupported) {
+                    // 首选 ShellV2：真正支持 PTY 与窗口尺寸协商
+                    const pty = await svc.pty({ command });
+                    if (disposed) {
+                        try {
+                            pty.kill();
+                        } catch {
+                            /* ignore */
+                        }
+                        return;
                     }
-                    return;
+                    session = pty;
+                    output = pty.output as unknown as ReadableStream<Uint8Array>;
+                    writer = pty.input as unknown as typeof writer;
+                    syncSize = (rows, cols) => {
+                        void pty.resize(rows, cols).catch(() => {
+                            /* 会话已结束 */
+                        });
+                    };
+                } else {
+                    // 降级：老设备无 ShellV2。用 stty 显式设定尺寸，
+                    // 之后每次 resize 通过 stdin 再发一次 stty。
+                    const pty = await adb.subprocess.noneProtocol.pty(
+                        `stty rows ${term.rows} cols ${term.cols} 2>/dev/null; exec ${command}`,
+                    );
+                    if (disposed) {
+                        try {
+                            pty.kill();
+                        } catch {
+                            /* ignore */
+                        }
+                        return;
+                    }
+                    session = pty;
+                    output = pty.output as unknown as ReadableStream<Uint8Array>;
+                    writer = pty.input as unknown as typeof writer;
+                    syncSize = (rows, cols) => {
+                        void writer
+                            ?.write(
+                                new TextEncoder().encode(
+                                    `stty rows ${rows} cols ${cols} 2>/dev/null\n`,
+                                ),
+                            )
+                            .catch(() => {
+                                /* closed */
+                            });
+                    };
                 }
-                session = s;
 
                 // 流式解码：保证多字节字符（中文）跨分片也不乱码
                 const decoder = new TextDecoder();
-                (s.output as unknown as ReadableStream<Uint8Array>)
+                output
                     .pipeTo(
                         new WritableStream<Uint8Array>({
                             write(chunk) {
@@ -135,11 +188,6 @@ export const TerminalPage = observer(function TerminalPage() {
                         /* aborted */
                     });
 
-                writer = s.input.getWriter() as unknown as {
-                    write(chunk: Uint8Array): Promise<void>;
-                    releaseLock?(): void;
-                };
-
                 // 输入 → 设备：只在本会话注册一次
                 dataSub = term.onData((data) => {
                     writer
@@ -148,6 +196,15 @@ export const TerminalPage = observer(function TerminalPage() {
                             /* closed */
                         });
                 });
+
+                // 立即把当前终端尺寸同步给设备端（关键修复）
+                syncSizeRef.current = syncSize;
+                try {
+                    fitRef.current?.fit();
+                } catch {
+                    /* ignore */
+                }
+                syncSize(term.rows, term.cols);
             } catch (e) {
                 if (!disposed) {
                     term.writeln(
@@ -163,6 +220,7 @@ export const TerminalPage = observer(function TerminalPage() {
             disposed = true;
             dataSub?.dispose();
             abort.abort();
+            syncSizeRef.current = null;
             try {
                 writer?.releaseLock?.();
             } catch {

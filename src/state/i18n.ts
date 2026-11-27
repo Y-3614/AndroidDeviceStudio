@@ -108,6 +108,10 @@ const dict = {
         mirrorStop: "停止投屏",
         mirrorPushServer: "推送 scrcpy 服务端…",
         mirrorStarting: "启动投屏…",
+        mirrorTouch: "触摸操作",
+        mirrorInterval: "刷新间隔(ms)",
+        mirrorTouchHint:
+            "开启「触摸操作」后，可在画面上直接点击（点按）、拖拽（滑动）、长按 600ms 以上（长按）。右键 = 返回键。",
         recordStart: "开始录制",
         recordStop: "停止录制并下载",
         rotate: "旋转",
@@ -317,6 +321,10 @@ const dict = {
         mirrorStop: "Stop mirror",
         mirrorPushServer: "Pushing scrcpy server…",
         mirrorStarting: "Starting mirror…",
+        mirrorTouch: "Touch input",
+        mirrorInterval: "Interval (ms)",
+        mirrorTouchHint:
+            "With touch input on, click (tap), drag (swipe) or press-and-hold 600ms+ (long press) directly on the screen. Right-click = Back.",
         recordStart: "Start recording",
         recordStop: "Stop & download",
         rotate: "Rotate",
