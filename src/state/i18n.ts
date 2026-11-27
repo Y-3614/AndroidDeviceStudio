@@ -181,9 +181,9 @@ const dict = {
         sleep: "息屏",
         wifiAdbTitle: "ADB over WiFi",
         wifiAdbHint:
-            "把 USB 连接切换为 WiFi 连接，摆脱数据线束缚。前提：先用 USB 连上设备，且手机与电脑处于同一局域网。",
-        wifiStep1: "第 1 步：让设备监听 TCP 端口",
-        wifiStep2: "第 2 步：读取设备 IP 地址",
+            "把 USB 连接切换为 WiFi 连接，摆脱数据线束缚。前提：先用 USB 连上设备（USB 调试授权通过），且手机与电脑处于同一局域网（同一 WiFi）。下面按顺序操作即可。",
+        wifiStep1: "第 1 步：先用 USB 连接并读取设备 IP",
+        wifiStep2: "第 2 步：让设备监听 TCP 端口",
         wifiStep3: "第 3 步：在本机命令行连接",
         wifiConnectHint:
             "浏览器出于安全限制无法直接建立 TCP 连接，因此实际的 WiFi 连接需要在本机命令行执行（把 <IP> 换成上一步得到的地址）：adb connect <IP>:5555 。连接成功后即可拔掉数据线，用 adb 命令操作设备。再次用 USB 时需要执行 adb usb 恢复。",
@@ -396,9 +396,9 @@ const dict = {
         sleep: "Sleep",
         wifiAdbTitle: "ADB over WiFi",
         wifiAdbHint:
-            "Switch from USB to a WiFi connection and get rid of the cable. Prerequisite: connect via USB first, and make sure the phone and computer are on the same LAN.",
-        wifiStep1: "Step 1: make the device listen on a TCP port",
-        wifiStep2: "Step 2: read the device IP address",
+            "Switch from USB to a WiFi connection and get rid of the cable. Prerequisite: connect via USB first (with USB debugging authorized), and make sure the phone and computer are on the same WiFi network. Follow the steps in order below.",
+        wifiStep1: "Step 1: connect via USB and read the device IP",
+        wifiStep2: "Step 2: make the device listen on a TCP port",
         wifiStep3: "Step 3: connect from your terminal",
         wifiConnectHint:
             "Browsers cannot open raw TCP connections for security reasons, so the actual WiFi connection is made from your terminal (replace <IP> with the address from the previous step): adb connect <IP>:5555 . Once connected you can unplug the cable and keep using adb. Run adb usb to switch back to USB.",

@@ -47,7 +47,19 @@ export const PowerPage = observer(function PowerPage() {
     }
 
     return (
-        <Stack styles={{ root: { padding: 16, gap: 12, overflow: "auto" } }}>
+        <Stack
+            styles={{
+                root: {
+                    padding: 16,
+                    gap: 12,
+                    height: "100%",
+                    minHeight: 0,
+                    boxSizing: "border-box",
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                },
+            }}
+        >
             <h2 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
                 {t.powerTitle}
             </h2>

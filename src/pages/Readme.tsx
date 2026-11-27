@@ -28,7 +28,20 @@ export const ReadmePage = observer(function ReadmePage() {
     );
 
     return (
-        <Stack styles={{ root: { padding: 24, gap: 12, overflow: "auto" } }}>
+        <Stack
+            styles={{
+                root: {
+                    padding: 24,
+                    gap: 12,
+                    // 必须显式撑满高度 + 允许收缩，否则内容超高时会被父级裁掉而不滚动
+                    height: "100%",
+                    minHeight: 0,
+                    boxSizing: "border-box",
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                },
+            }}
+        >
             <h1 style={{ fontSize: 24, margin: 0 }}>{t.appName}</h1>
             <p style={bodyStyle}>
                 {zh

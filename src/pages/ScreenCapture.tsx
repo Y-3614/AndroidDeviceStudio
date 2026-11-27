@@ -39,7 +39,19 @@ export const ScreenCapturePage = observer(function ScreenCapturePage() {
     }
 
     return (
-        <Stack styles={{ root: { padding: 16, gap: 12 } }}>
+        <Stack
+            styles={{
+                root: {
+                    padding: 16,
+                    gap: 12,
+                    height: "100%",
+                    minHeight: 0,
+                    boxSizing: "border-box",
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                },
+            }}
+        >
             <DefaultButton
                 text={t.captureScreenshot}
                 iconProps={{ iconName: "Camera" }}
