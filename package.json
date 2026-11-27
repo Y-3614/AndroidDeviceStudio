@@ -30,6 +30,7 @@
     "@yume-chan/stream-extra": "^2.6.1",
     "@yume-chan/struct": "^2.1.0",
     "fflate": "^0.8.2",
+    "fix-webm-duration": "^1.0.6",
     "mobx": "^6.13.0",
     "mobx-react-lite": "^4.0.7",
     "react": "^18.3.1",

@@ -15,6 +15,7 @@ import { drawFramebuffer } from "../state/framebuffer";
 import { i18n } from "../state/i18n";
 import { saveBlob } from "../state/file-stream";
 import { shell } from "../state/privilege";
+import { startScreenRecording, type ScreenRecorder } from "../state/recorder";
 
 /**
  * 投屏页面（基于 framebuffer 连续抓帧）。
@@ -34,7 +35,8 @@ export const MirrorPage = observer(function MirrorPage() {
     const [intervalMs, setIntervalMs] = useState(60);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const stopRef = useRef<(() => void) | null>(null);
-    const recorderRef = useRef<MediaRecorder | null>(null);
+    const recorderRef = useRef<ScreenRecorder | null>(null);
+    const [recordSeconds, setRecordSeconds] = useState(0);
     const intervalRef = useRef(intervalMs);
     intervalRef.current = intervalMs;
 
@@ -177,34 +179,32 @@ export const MirrorPage = observer(function MirrorPage() {
         setRunning(false);
     };
 
-    const toggleRecord = () => {
+    const toggleRecord = async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         if (!recording) {
             try {
-                const stream = canvas.captureStream(15);
-                const chunks: Blob[] = [];
-                const recorder = new MediaRecorder(stream, {
-                    mimeType: "video/webm",
-                });
-                recorder.ondataavailable = (e) => {
-                    if (e.data.size) chunks.push(e.data);
-                };
-                recorder.onstop = () => {
-                    saveBlob(
-                        new Blob(chunks, { type: "video/webm" }),
-                        `record-${Date.now()}.webm`,
-                    );
-                };
-                recorder.start();
-                recorderRef.current = recorder;
+                setError(undefined);
+                setRecordSeconds(0);
+                recorderRef.current = startScreenRecording(canvas, 15, (s) =>
+                    setRecordSeconds(s),
+                );
                 setRecording(true);
             } catch (e) {
                 setError(e instanceof Error ? e.message : String(e));
             }
         } else {
-            recorderRef.current?.stop();
+            const rec = recorderRef.current;
             setRecording(false);
+            recorderRef.current = null;
+            try {
+                if (rec) {
+                    const { blob, filename } = await rec.stop();
+                    saveBlob(blob, filename);
+                }
+            } catch (e) {
+                setError(e instanceof Error ? e.message : String(e));
+            }
         }
     };
 
@@ -254,6 +254,11 @@ export const MirrorPage = observer(function MirrorPage() {
                     onClick={toggleRecord}
                     disabled={!running}
                 />
+                {recording && (
+                    <span style={{ color: "#d13438", fontSize: 12 }}>
+                        ● {t.recording} {recordSeconds}s
+                    </span>
+                )}
                 <Toggle
                     label={t.mirrorTouch}
                     inlineLabel
