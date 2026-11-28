@@ -263,8 +263,8 @@ export const ReadmePage = observer(function ReadmePage() {
                     <li>
                         <b>{zh ? "TEST 脚本" : "TEST Script"}</b>
                         {zh
-                            ? "：把项目里常用的批处理 / shell 流程固化成按钮 —— 日志拉取到电脑（自动建时间戳子目录）、日志清理、Monkey 稳定性测试（含自检）、蓝牙 HCI 日志、CPU / 内存监控（可导出 CSV）、应用管理（可导出包名 txt）。所有命令、路径、包名都可改成你自己项目的值并保存。"
-                            : ": turns common batch/shell flows into buttons — pull logs to PC (auto timestamp sub-folder), clean logs, Monkey stability test (with self-check), Bluetooth HCI logs, CPU/memory monitoring (CSV export), app management (txt export). All commands, paths and package names are editable and persisted."}
+                            ? "：把项目里常用的批处理 / shell 流程固化成按钮 —— 日志拉取到电脑（自动建时间戳子目录）、日志清理、Monkey 稳定性测试（前台实时日志 / 后台 + 自检 + 保存下载）、蓝牙 HCI 日志、CPU / 内存监控（实时曲线 + 内存泄露检测 + 导出 CSV）、应用管理（三范围 + 打开应用 + 导出包名 txt）。所有导出 / 删除操作都有百分比进度与完成反馈；所有命令、路径、包名都可改成你自己项目的值并保存。"
+                            : ": turns common batch/shell flows into buttons — pull logs to PC (auto timestamp sub-folder), clean logs, Monkey (foreground live log / background + self-check + save/download), Bluetooth HCI logs, CPU/memory monitoring (live charts + memory-leak detection + CSV export), app management (three scopes + open app + txt export). Every export/delete shows percent progress and result feedback; all commands, paths and package names are editable and persisted."}
                     </li>
                     <li>
                         <b>{zh ? "安装 APK" : "Install APK"}</b>
@@ -367,15 +367,22 @@ export const ReadmePage = observer(function ReadmePage() {
                             : "Target packages (one per line, pre-filled), arguments, throttle and event count are editable; a live preview is shown."}
                     </li>
                     <li>
-                        <b>{zh ? "自检（推荐先点）" : "Self-check (run first)"}</b>
+                        <b>{zh ? "执行方式：前台 / 后台" : "Mode: foreground / background"}</b>
                         {zh
-                            ? "：会检查 monkey 是否存在、后台执行通道是否可用、/sdcard/yx_log 是否可写、目标包在设备上能找到几个 —— 点「后台运行 Monkey」没反应时先点它定位原因。"
-                            : ": checks whether monkey exists, background channel works, /sdcard/yx_log is writable, and how many target packages exist on the device."}
+                            ? "。前台会在当前页面实时流式打印 monkey 的完整输出（事件、崩溃、结束统计），点「停止 Monkey」会终止设备端进程；后台写入设备文件，不占用页面。"
+                            : ": foreground streams the full monkey output live on this page (Stop terminates the device process); background writes to a device file."}
                     </li>
                     <li>
+                        <b>{zh ? "Monkey 实时日志" : "Live monkey log"}</b>
                         {zh
-                            ? "点「后台运行 Monkey」会在设备后台启动，输出写入 /sdcard/yx_log/monkey_时间戳.log；约 2.5 秒后会自动确认进程是否真的起来了。若未起来，可点「结束设备 monkey 进程」清理后重试。"
-                            : "Run Monkey in background starts it on the device; output goes to /sdcard/yx_log/monkey_<timestamp>.log, and the process is verified after ~2.5s. Kill monkey process cleans up if needed."}
+                            ? "：最大保留 4000 行，支持「保存日志到本地文件夹」或「下载日志」保存为 txt。运行中 / 已结束状态与成败都有明确提示。"
+                            : ": keeps up to 4000 lines; save to a local folder or download as txt. Running/finished status and result are shown."}
+                    </li>
+                    <li>
+                        <b>{zh ? "自检（推荐先点）" : "Self-check (run first)"}</b>
+                        {zh
+                            ? "：会检查 monkey 是否存在、执行通道是否可用、/sdcard/yx_log 是否可写、目标包在设备上能找到几个 —— 点执行没反应时先点它定位原因。"
+                            : ": checks whether monkey exists, the channel works, /sdcard/yx_log is writable, and how many target packages exist."}
                     </li>
                 </ol>
 
@@ -390,8 +397,8 @@ export const ReadmePage = observer(function ReadmePage() {
                     </li>
                     <li>
                         {zh
-                            ? "「导出 HCI 日志」/「导出到本地文件夹」会把 /data/misc/bluetooth/logs 拉取下来（需要 root）。"
-                            : "Export HCI logs / to local folder pulls /data/misc/bluetooth/logs (root required)."}
+                            ? "「导出 HCI 日志」/「导出到本地文件夹」会把 /data/misc/bluetooth/logs 拉取下来（需要 root），操作时下方显示百分比进度与完成 / 失败反馈。"
+                            : "Export HCI logs / to local folder pulls /data/misc/bluetooth/logs (root required); percent progress and result feedback are shown."}
                     </li>
                     <li>
                         {zh ? "「删除 HCI 日志」清空该目录。" : "Delete HCI logs clears that directory."}
@@ -404,19 +411,25 @@ export const ReadmePage = observer(function ReadmePage() {
                 <ol style={listStyle}>
                     <li>
                         {zh
-                            ? "设定采样间隔（秒）后点「开始监控」，会周期性执行 dumpsys cpuinfo / dumpsys meminfo。"
-                            : "Set the interval (seconds) and click Start monitoring; it periodically runs dumpsys cpuinfo / meminfo."}
+                            ? "设定采样间隔（秒）后点「开始监控」，会周期采集设备真实系统数据：CPU 用 /proc/stat 两次差值计算，内存用 /proc/meminfo。"
+                            : "Set the interval and click Start; it samples real data — CPU from /proc/stat deltas, memory from /proc/meminfo."}
                     </li>
                     <li>
                         {zh
-                            ? "上方以趋势条显示 CPU% 与内存% 变化，下方显示最近一次原始采样结果，右侧显示「上次采样」系统时点。"
-                            : "Trend bars show CPU%/memory% over time; latest raw samples and the last sample timestamp are shown."}
+                            ? "CPU% 与内存% 各以一条实时折线曲线展示（随采样点增长即时重绘），并显示采样点数与已采集时长。"
+                            : "CPU% and memory% are drawn as live line charts; sample count and elapsed time are shown."}
+                    </li>
+                    <li>
+                        <b>{zh ? "检测内存泄露" : "Detect memory leak"}</b>
+                        {zh
+                            ? "：对整段采集时段做线性回归，给出总增长、增长速率（%/分钟）与拟合度 R²，判定「疑似内存泄露 / 轻微增长 / 未发现明显泄露」（至少 5 个点）。"
+                            : ": linear regression over the whole window gives total growth, %/min and R², and classifies likely / slight / none (needs ≥5 samples)."}
                     </li>
                     <li>
                         <b>{zh ? "导出监控记录（CSV）" : "Export monitor log (CSV)"}</b>
                         {zh
-                            ? "：可选择本地文件夹，把每次采样（时间、CPU%、内存%）保存为 CSV，便于后续用表格分析。"
-                            : ": pick a local folder to save every sample (time, CPU%, memory%) as CSV for later analysis."}
+                            ? "：保存每次采样（时间、CPU%、内存%）为 CSV。"
+                            : ": saves every sample (time, CPU%, memory%) as CSV."}
                     </li>
                 </ol>
 
@@ -437,8 +450,8 @@ export const ReadmePage = observer(function ReadmePage() {
                     </li>
                     <li>
                         {zh
-                            ? "选中应用后可「启动应用」「进入应用界面」（打开系统设置里的应用详情页）或「强制停止」；勾选「启动前先强制停止」确保冷启动。"
-                            : "Launch app, Open app info (system settings detail page), or Force stop; Force stop before launch ensures a cold start."}
+                            ? "选中应用后可「启动应用」「打开应用」（解析 Launcher Activity 后 am start，等效于点开图标）或「强制停止」；勾选「启动前先强制停止」确保冷启动。"
+                            : "Launch app, Open app (resolves the Launcher Activity then am start, like tapping the icon), or Force stop; Force stop before launch ensures a cold start."}
                     </li>
                 </ol>
 
@@ -472,8 +485,8 @@ export const ReadmePage = observer(function ReadmePage() {
                     </li>
                     <li>
                         {zh
-                            ? "每条命令右侧：「复制」拿到命令文本；「执行」就地弹出结果框（不占据列表空间）——带 adb shell 的会真正在设备上运行，电脑端的命令会给出网页内的等价结果或跳转指引（例如 adb devices -l 会返回当前设备的完整信息，adb root 会引导到「权限与挂载」页）。自定义命令额外有「修改」「删除」。"
-                            : "Each row: Copy, and Run (shows results in a dialog). adb shell commands run on the device; host commands return an equivalent result or a jump hint (adb devices -l returns the current device info; adb root points to the Privilege page)."}
+                            ? "每条命令右侧：「复制」拿到命令文本；「执行」会就地运行，命令与输出进入页面顶部的「命令执行台」（集中显示所有执行过的命令，支持下载记录 / 清空）——带 adb shell 的会真正在设备上运行，电脑端的命令会给出网页内的等价结果或跳转指引（例如 adb devices -l 会返回当前设备的完整信息，adb root 会引导到「权限与挂载」页）。自定义命令额外有「修改」「删除」。"
+                            : "Each row: Copy, and Run — the command and its output go to the Command Console at the top of the page (aggregates every run; download or clear). adb shell commands run on the device; host commands return an equivalent result or a jump hint."}
                     </li>
                     <li>
                         {zh
