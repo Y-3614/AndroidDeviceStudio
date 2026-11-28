@@ -64,8 +64,22 @@ const MAX_MEMORY_LINES = 8000;
 const MAX_DISPLAY = 1500;
 /** 批量刷新间隔：把高频 chunk 合并成一次 UI 更新，避免每个分片都 re-render */
 const VIEW_FLUSH_INTERVAL = 300; // ms
-const FLUSH_BYTES = 512 * 1024;
+const FLUSH_BYTES = 256 * 1024;
 const FILE_LIMIT = 20 * 1024 * 1024; // 20MB 分片
+/**
+ * 真实提交到磁盘的间隔。
+ *
+ * ⚠️ 关键：File System Access API 的 `createWritable()` 写入的是**临时 swap 文件**，
+ * 只有 `close()` 时才把内容真正替换进目标文件。
+ * 旧实现只在 20MB 分片或 stop() 时才 close →
+ * 采集过程中在文件管理器里**根本看不到文件**（用户反馈的「没有 log」）。
+ * 现在改为：保持句柄常开，每隔 COMMIT_INTERVAL 主动「写一批 → close 提交 → 重新打开」，
+ * 于是文件一采集就存在，并随时间持续增长。
+ */
+const COMMIT_INTERVAL = 3000; // ms
+
+/** UTF-8 编码器：seek 需要字节偏移，不能用字符串长度（中文是多字节） */
+const UTF8 = new TextEncoder();
 
 /** 一行 threadtime 形如：01-02 03:04:05.678  1234  5678 D Tag: message */
 const THREADTIME_RE =
@@ -160,6 +174,13 @@ export interface AppInfo {
 /**
  * 日志文件写入器：按 20MB 分片写入用户选择的本地文件夹。
  * 未选择文件夹时不启用落盘，仅保存在内存。
+ *
+ * ⚠️ 落盘原理（踩过的坑）：
+ * File System Access API 的 `createWritable()` 写入的是**临时 swap 文件**，
+ * 调用 `close()` 才会把它原子替换进目标文件。
+ * 因此若只在「20MB 分片」或「停止采集」时才 close，
+ * 采集过程中文件在磁盘上**根本不存在** —— 这就是用户反馈「没有 log」的原因。
+ * 现在改为每 COMMIT_INTERVAL 主动提交一次（写 → close → 以 keepExistingData 重开并 seek 到末尾）。
  */
 class LogFileWriter {
     private dir: FileSystemDirectoryHandle | undefined;
@@ -167,10 +188,17 @@ class LogFileWriter {
     private writable: FileSystemWritableFileStream | undefined;
     private pending: string[] = [];
     private pendingBytes = 0;
+    /** 当前分片已写入字节数 */
     private currentBytes = 0;
+    /** 本次会话累计写入字节数（跨分片） */
+    private totalBytes = 0;
     private part = 0;
     private sessionName = "";
     private timer: ReturnType<typeof setInterval> | undefined;
+    private flushing = false;
+    private lastError: string | undefined;
+    /** 上次提交时的分片字节数（用于避免空提交） */
+    private lastCommittedBytes = -1;
 
     get enabled(): boolean {
         return !!this.dir;
@@ -178,6 +206,21 @@ class LogFileWriter {
 
     get baseName(): string {
         return this.sessionName;
+    }
+
+    /** 本次会话累计写入磁盘的字节数（用于 UI 显示大小） */
+    get bytesWritten(): number {
+        return this.totalBytes;
+    }
+
+    /** 当前分片序号（0 起） */
+    get partIndex(): number {
+        return this.part;
+    }
+
+    /** 最近一次写盘错误（用于 UI 提示） */
+    get error(): string | undefined {
+        return this.lastError;
     }
 
     async chooseDirectory(): Promise<string | undefined> {
@@ -191,7 +234,22 @@ class LogFileWriter {
                 "当前浏览器不支持选择文件夹（需 Chrome/Edge 桌面版）。可继续仅用浏览器内存缓存。",
             );
         }
-        this.dir = await picker.call(window);
+        const handle = await picker.call(window);
+        // 立即验证写权限：部分浏览器选择后仍需授权
+        const anyHandle = handle as unknown as {
+            queryPermission?: (d: { mode: string }) => Promise<string>;
+            requestPermission?: (d: { mode: string }) => Promise<string>;
+        };
+        if (anyHandle.queryPermission) {
+            let state = await anyHandle.queryPermission({ mode: "readwrite" });
+            if (state !== "granted" && anyHandle.requestPermission) {
+                state = await anyHandle.requestPermission({ mode: "readwrite" });
+            }
+            if (state !== "granted") {
+                throw new Error("未获得文件夹写入权限，请重新选择并点击「允许」。");
+            }
+        }
+        this.dir = handle;
         return this.dir.name;
     }
 
@@ -201,58 +259,87 @@ class LogFileWriter {
 
     async start() {
         this.part = 0;
+        this.totalBytes = 0;
+        this.currentBytes = 0;
+        this.lastCommittedBytes = -1;
+        this.lastError = undefined;
+        this.pending = [];
+        this.pendingBytes = 0;
         const d = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
         this.sessionName = `logcat-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(
             d.getDate(),
         )}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
         if (this.dir) {
-            await this.openPart();
+            try {
+                await this.openPart();
+                // 立刻创建一个空文件并提交，保证目录里马上能看到
+                await this.commit();
+            } catch (e) {
+                this.lastError = e instanceof Error ? e.message : String(e);
+            }
         }
         this.timer = setInterval(() => {
-            void this.flush();
-        }, 400);
+            void this.tick();
+        }, COMMIT_INTERVAL);
     }
 
+    private partName(part: number): string {
+        return part === 0
+            ? `${this.sessionName}.txt`
+            : `${this.sessionName}.part${part}.txt`;
+    }
+
+    /** 打开当前分片的可写流（保留已有内容，游标定位到末尾） */
     private async openPart() {
         if (!this.dir) return;
-        const name =
-            this.part === 0
-                ? `${this.sessionName}.txt`
-                : `${this.sessionName}.part${this.part}.txt`;
-        this.file = await this.dir.getFileHandle(name, { create: true });
-        this.writable = await this.file.createWritable();
-        this.currentBytes = 0;
-    }
-
-    private async rollIfNeeded() {
-        if (this.currentBytes >= FILE_LIMIT) {
-            await this.closeFile();
-            this.part += 1;
-            await this.openPart();
+        this.file = await this.dir.getFileHandle(this.partName(this.part), {
+            create: true,
+        });
+        this.writable = await this.file.createWritable({
+            keepExistingData: true,
+        });
+        // 游标移到末尾，后续 write 即追加
+        if (this.currentBytes > 0) {
+            await this.writable.seek(this.currentBytes);
         }
     }
 
     private async closeFile() {
         if (this.writable) {
             try {
+                // close() 才真正把 swap 文件提交到磁盘
                 await this.writable.close();
-            } catch {
-                /* ignore */
+            } catch (e) {
+                this.lastError = e instanceof Error ? e.message : String(e);
             }
             this.writable = undefined;
         }
     }
 
-    /** 追加一批行（内存缓冲） */
+    /** 定时任务：写盘 + 提交，保证磁盘上文件持续增长 */
+    private async tick() {
+        await this.flush();
+        // 只有在真的有新数据写入时才提交（close + 重开），避免空转复制文件
+        if (this.currentBytes !== this.lastCommittedBytes) {
+            await this.commit();
+            this.lastCommittedBytes = this.currentBytes;
+        }
+        await this.rollIfNeeded();
+    }
+
+    /** 追加一批行（进入内存缓冲） */
     push(lines: string[]) {
         if (!this.dir || lines.length === 0) return;
         this.pending.push(...lines);
         for (const l of lines) this.pendingBytes += l.length + 1;
-        if (this.pendingBytes >= FLUSH_BYTES) void this.flush();
+        if (this.pendingBytes >= FLUSH_BYTES) {
+            // 大流量时立即写 + 提交，避免内存堆积
+            void this.tick();
+        }
     }
 
-    private flushing = false;
+    /** 把缓冲写进 swap 文件（尚未提交到磁盘） */
     async flush() {
         if (!this.dir || !this.writable || this.flushing || this.pending.length === 0) {
             return;
@@ -263,12 +350,42 @@ class LogFileWriter {
             this.pending = [];
             this.pendingBytes = 0;
             await this.writable.write(text);
-            this.currentBytes += text.length;
-            await this.rollIfNeeded();
-        } catch {
-            /* 写盘失败不影响采集 */
+            const n = UTF8.encode(text).byteLength;
+            this.currentBytes += n;
+            this.totalBytes += n;
+        } catch (e) {
+            this.lastError = e instanceof Error ? e.message : String(e);
         } finally {
             this.flushing = false;
+        }
+    }
+
+    /** close() 提交到磁盘，然后以追加模式重新打开 */
+    private async commit() {
+        if (!this.writable) return;
+        // 还有未写的缓冲，先写掉再提交
+        if (this.pending.length > 0) {
+            await this.flush();
+        }
+        await this.closeFile();
+        try {
+            await this.openPart();
+        } catch (e) {
+            this.lastError = e instanceof Error ? e.message : String(e);
+        }
+    }
+
+    private async rollIfNeeded() {
+        if (this.currentBytes < FILE_LIMIT) return;
+        await this.closeFile();
+        this.part += 1;
+        this.currentBytes = 0;
+        this.lastCommittedBytes = 0;
+        try {
+            await this.openPart();
+            await this.commit();
+        } catch (e) {
+            this.lastError = e instanceof Error ? e.message : String(e);
         }
     }
 
@@ -278,6 +395,7 @@ class LogFileWriter {
             this.timer = undefined;
         }
         await this.flush();
+        // 停止时必须 close，把最后一批数据真正落盘
         await this.closeFile();
         this.pending = [];
         this.pendingBytes = 0;
@@ -317,6 +435,12 @@ class LogcatStore {
     // ---- 落盘 ----
     writer = new LogFileWriter();
     dirName: string | undefined = undefined;
+    /** 已写入磁盘的字节数（由节流定时器同步，用于 UI 显示大小） */
+    logBytes = 0;
+    /** 当前分片序号（0 起） */
+    logPart = 0;
+    /** 落盘错误（若有） */
+    logError: string | undefined = undefined;
 
     // ---- 时间限制 ----
     /** 自动停止分钟数（0 = 不限制） */
@@ -598,6 +722,22 @@ class LogcatStore {
      * 3. 只在有内容时更新，避免空转。
      */
     private commitPending() {
+        // 顺便把落盘进度同步给 UI（大小 / 分片 / 错误）
+        const w = this.writer;
+        const nextBytes = w.bytesWritten;
+        const nextPart = w.partIndex;
+        const nextErr = w.error;
+        if (
+            nextBytes !== this.logBytes ||
+            nextPart !== this.logPart ||
+            nextErr !== this.logError
+        ) {
+            runInAction(() => {
+                this.logBytes = nextBytes;
+                this.logPart = nextPart;
+                this.logError = nextErr;
+            });
+        }
         if (this.pending.length === 0) return;
         const batch = this.pending;
         this.pending = [];

@@ -1,5 +1,6 @@
 import {
     DefaultButton,
+    Dropdown,
     MessageBar,
     MessageBarType,
     Spinner,
@@ -11,8 +12,11 @@ import { observer } from "mobx-react-lite";
 import { useEffect, useRef, useState } from "react";
 import { AdbScrcpyClient, AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import {
+    AndroidAvcLevel,
+    AndroidAvcProfile,
     AndroidMotionEventAction,
     AndroidMotionEventButton,
+    ScrcpyCodecOptions,
     ScrcpyPointerId,
 } from "@yume-chan/scrcpy";
 import { WebCodecsVideoDecoder } from "@yume-chan/scrcpy-decoder-webcodecs";
@@ -47,6 +51,13 @@ export const MirrorPage = observer(function MirrorPage() {
     const [fps, setFps] = useState(0);
     const [touchEnabled, setTouchEnabled] = useState(true);
     const [recordSeconds, setRecordSeconds] = useState(0);
+    /**
+     * 解码器：默认 tinyh264（软件解码，与官方 demo 一致，兼容性最好）。
+     * WebCodecs 是硬件解码，性能好但在部分设备（尤其车机）上会静默黑屏。
+     */
+    const [decoderKind, setDecoderKind] = useState<"tinyh264" | "webcodecs">(
+        "tinyh264",
+    );
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -234,14 +245,28 @@ export const MirrorPage = observer(function MirrorPage() {
 
             // 2) 启动 scrcpy 服务端进程
             setStatus(t.mirrorStarting);
+            /**
+             * ⚠️ 关键：必须显式限定编码参数，否则黑屏。
+             *
+             * TinyH264（软解，兼容性最好）**只支持 Baseline profile / Level 4**。
+             * 若让设备自由选择，Android 默认常用 High profile，
+             * 软解拿到不认识的 SPS 会静默不出帧 → 画面全黑且无报错。
+             * 因此这里按所选解码器的能力，显式要求设备用 Baseline 编码。
+             */
+            const codecOptions = new ScrcpyCodecOptions();
+            if (decoderKind === "tinyh264") {
+                codecOptions.options.profile = AndroidAvcProfile.Baseline;
+                codecOptions.options.level = AndroidAvcLevel.Level4;
+            }
             const options = new AdbScrcpyOptionsLatest({
                 videoCodec: "h264",
-                maxSize: 1600,
+                maxSize: 1280,
                 maxFps: 30,
-                videoBitRate: 8000000,
+                videoBitRate: 4000000,
                 audio: false,
                 control: true,
                 sendFrameMeta: true,
+                videoCodecOptions: codecOptions,
             });
             const client = await AdbScrcpyClient.start(
                 adb,
@@ -281,16 +306,17 @@ export const MirrorPage = observer(function MirrorPage() {
             };
             let canvas: HTMLCanvasElement;
 
-            if (WebCodecsVideoDecoder.isSupported) {
+            // ⚠️ 解码器选择（黑屏问题的关键）：
+            // 官方 demo 唯一的解码器是 TinyH264（纯软件解码）。
+            // WebCodecs 走的是浏览器硬件解码，在车机这类设备返回的 H.264 上
+            // 很容易静默失败（configure 成功但不出帧）→ 画面全黑且无报错。
+            // 因此默认用 TinyH264，仅在用户显式选择时才用 WebCodecs。
+            if (decoderKind === "webcodecs" && WebCodecsVideoDecoder.isSupported) {
                 canvas = document.createElement("canvas");
                 const renderer = new BitmapVideoFrameRenderer(canvas);
-                const dec = new WebCodecsVideoDecoder({
-                    codec,
-                    renderer,
-                });
+                const dec = new WebCodecsVideoDecoder({ codec, renderer });
                 decoder = dec as unknown as typeof decoder;
             } else {
-                // 兜底：TinyH264 软解（仅 H.264，性能低但兼容性好）
                 const dec = new TinyH264Decoder();
                 canvas = dec.renderer as HTMLCanvasElement;
                 decoder = dec as unknown as typeof decoder;
@@ -300,9 +326,10 @@ export const MirrorPage = observer(function MirrorPage() {
             canvas.style.maxWidth = "100%";
             canvas.style.maxHeight = "100%";
             canvas.style.display = "block";
+            canvas.style.margin = "0 auto";
             attachTouch(canvas);
 
-            // 清空容器并挂载画布
+            // 清空容器并挂载画布（必须在开始解码前完成，否则渲染无处可去）
             while (container.firstChild) container.removeChild(container.firstChild);
             container.appendChild(canvas);
 
@@ -483,6 +510,20 @@ export const MirrorPage = observer(function MirrorPage() {
                     inlineLabel
                     checked={touchEnabled}
                     onChange={(_, c) => setTouchEnabled(!!c)}
+                />
+                <Dropdown
+                    selectedKey={decoderKind}
+                    options={[
+                        { key: "tinyh264", text: t.decoderSoft },
+                        { key: "webcodecs", text: t.decoderHard },
+                    ]}
+                    onChange={(_, o) =>
+                        setDecoderKind(
+                            (o?.key as "tinyh264" | "webcodecs") ?? "tinyh264",
+                        )
+                    }
+                    styles={{ root: { width: 180 } }}
+                    disabled={running}
                 />
                 {running && <Spinner size={SpinnerSize.small} />}
                 <span style={{ color: "#605e5c", fontSize: 12 }}>

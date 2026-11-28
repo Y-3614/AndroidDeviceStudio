@@ -1,5 +1,6 @@
 import {
     DefaultButton,
+    Dropdown,
     MessageBar,
     MessageBarType,
     ProgressIndicator,
@@ -12,7 +13,12 @@ import { i18n } from "../state/i18n";
 import { fs } from "../state/fs";
 import { shell } from "../state/privilege";
 
-const TMP_DIR = "/data/local/tmp";
+/** 可选的安装临时目录：默认 SD 卡，权限不足时可切到 /data/local/tmp */
+const INSTALL_DIRS = {
+    sdcard: "/sdcard",
+    tmp: "/data/local/tmp",
+} as const;
+type InstallDirKey = keyof typeof INSTALL_DIRS;
 
 export const InstallPage = observer(function InstallPage() {
     const t = i18n.t;
@@ -20,6 +26,8 @@ export const InstallPage = observer(function InstallPage() {
     const [progress, setProgress] = useState(0);
     const [log, setLog] = useState("");
     const [error, setError] = useState<string | undefined>();
+    const [dirKey, setDirKey] = useState<InstallDirKey>("sdcard");
+    const tmpDir = INSTALL_DIRS[dirKey];
 
     const chooseApk = () => {
         const input = document.createElement("input");
@@ -40,12 +48,12 @@ export const InstallPage = observer(function InstallPage() {
         setLog("");
         setError(undefined);
 
-        const remote = `${TMP_DIR}/${file.name}`;
+        const remote = `${tmpDir}/${file.name}`;
         const append = (s: string) => setLog((prev) => prev + s + "\n");
 
         try {
             // ① 确保临时目录存在
-            await shell(adb, `mkdir -p ${TMP_DIR}`);
+            await shell(adb, `mkdir -p ${tmpDir}`);
 
             // ② 推送到 /data/local/tmp（关键：显式指定目标路径，
             //    之前 bug 是推到了浏览器当前目录，pm 自然找不到文件）
@@ -130,6 +138,19 @@ export const InstallPage = observer(function InstallPage() {
             <h2 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
                 {t.installTitle}
             </h2>
+
+            <Dropdown
+                label={t.installPath}
+                selectedKey={dirKey}
+                options={[
+                    { key: "sdcard", text: t.installPathSd },
+                    { key: "tmp", text: t.installPathTmp },
+                ]}
+                onChange={(_, o) => setDirKey((o?.key as InstallDirKey) ?? "sdcard")}
+                styles={{ root: { maxWidth: 320 } }}
+                disabled={installing}
+            />
+            <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.installPathHint}</span>
 
             <DefaultButton
                 text={t.chooseApk}

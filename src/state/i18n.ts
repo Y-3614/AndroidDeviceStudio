@@ -33,6 +33,7 @@ const dict = {
             mirror: "投屏",
             record: "录制",
             logcat: "日志 Logcat",
+            testScript: "TEST 脚本",
             install: "安装 APK",
             privilege: "权限与挂载",
             power: "电源菜单",
@@ -109,6 +110,8 @@ const dict = {
         mirrorPushServer: "推送 scrcpy 服务端…",
         mirrorStarting: "启动投屏…",
         mirrorTouch: "触摸操作",
+        decoderSoft: "解码器：软解（兼容）",
+        decoderHard: "解码器：硬解（性能）",
         mirrorInterval: "刷新间隔(ms)",
         mirrorTouchHint:
             "开启「触摸操作」后，可在画面上直接点击（点按）、拖拽（滑动）、长按（停留 600ms 以上）。右键 = 返回键。",
@@ -162,6 +165,8 @@ const dict = {
         unlimited: "不限制",
         collectedLines: "已采集",
         showingLines: "显示",
+        logSize: "日志大小",
+        logFilePart: "分片",
         autoStopped: "已达到设定的时间，自动停止采集",
         logcatPickAppHint: "选择应用后仅显示该应用的日志（按 PID 过滤，可按「刷新 PID」重新匹配）",
         logcatNoData:
@@ -209,6 +214,68 @@ const dict = {
         hintParse: "提示：APK 文件损坏或不是有效的安装包。",
 
         installTitle: "安装 APK",
+        installPath: "安装路径",
+        installPathHint:
+            "默认推送到 SD 卡（/sdcard）。若安装失败提示权限问题，可改为 /data/local/tmp。",
+
+        /* ===== TEST 脚本 ===== */
+        testScriptTitle: "TEST 脚本",
+        testScriptIntro:
+            "把常用的测试流程固化成按钮：日志采集与拉取、Monkey 稳定性测试、蓝牙 HCI 日志、CPU/内存监控、应用管理。所有命令与包名都可以按你的项目修改，并自动保存在浏览器里。",
+        tsSectionLog: "一、日志采集与拉取",
+        tsLogcatCommand: "后台 logcat 命令",
+        tsLogcatCommandHint:
+            "会在设备后台执行，输出写入 /sdcard/yx_log/。例如：logcat -v time",
+        tsStartLog: "开始采集日志",
+        tsStopLog: "停止采集（本地状态）",
+        tsClearDeviceLog: "清空设备日志缓冲",
+        tsPullPaths: "要拉取到电脑的路径（每行一个）",
+        tsPullToFolder: "选择本地文件夹并导出",
+        tsPullDownload: "拉取并下载（zip）",
+        tsRemoveLogs: "清理设备日志目录",
+        tsCleanPaths: "要清理的设备路径（每行一个）",
+        tsRemoveLogsHint: "⚠️ 会执行 rm -rf，请务必确认路径无误后再点。",
+
+        tsSectionMonkey: "二、Monkey 稳定性测试",
+        tsMonkeyPackages: "被测应用包名（每行一个）",
+        tsMonkeyArgs: "Monkey 参数",
+        tsMonkeyThrottle: "事件间隔（ms）",
+        tsMonkeyEvents: "事件总数",
+        tsMonkeyPreview: "命令预览",
+        tsRunMonkey: "后台运行 Monkey",
+        tsStopMonkey: "停止（本地状态）",
+
+        tsSectionHci: "三、蓝牙 HCI 日志",
+        tsHciHint:
+            "手机需要 root。开启开关后需重启蓝牙（或重启设备）才会开始记录 HCI 日志。",
+        tsEnableHci: "开启 HCI 日志",
+        tsExportHci: "导出 HCI 日志",
+        tsExportHciToFolder: "导出到本地文件夹",
+        tsRemoveHci: "删除 HCI 日志",
+
+        tsSectionMonitor: "四、CPU / 内存占用监控",
+        tsMonitorInterval: "采样间隔（秒）",
+        tsStartMonitor: "开始监控",
+        tsStopMonitor: "停止监控",
+        tsCpuUsage: "CPU 占用趋势",
+        tsMemUsage: "内存占用趋势",
+
+        tsSectionApps: "五、应用管理",
+        tsIncludeSystem: "包含系统应用",
+        tsListApps: "列出所有应用包名",
+        tsLaunchApp: "启动应用",
+        tsForceStop: "强制停止",
+        tsLaunchFirstStop: "启动前先强制停止",
+        tsAppHint: "选择应用后可「启动」或「强制停止」。被停止的应用再点「启动」即可拉起。",
+
+        tsSaveConfig: "保存配置",
+        tsResetConfig: "恢复默认",
+        tsOutput: "执行输出",
+        tsClearOutput: "清空输出",
+        tsNotConnected: "请先连接设备。",
+
+        installPathSd: "SD 卡（/sdcard）",
+        installPathTmp: "/data/local/tmp",
         chooseApk: "选择 APK 文件",
         installing: "安装中…",
         installDone: "安装完成",
@@ -249,6 +316,7 @@ const dict = {
             mirror: "Mirror",
             record: "Record",
             logcat: "Logcat",
+            testScript: "TEST Script",
             install: "Install APK",
             privilege: "Privilege & Mount",
             power: "Power Menu",
@@ -326,6 +394,8 @@ const dict = {
         mirrorPushServer: "Pushing scrcpy server…",
         mirrorStarting: "Starting mirror…",
         mirrorTouch: "Touch input",
+        decoderSoft: "Decoder: SW (compatible)",
+        decoderHard: "Decoder: HW (performance)",
         mirrorInterval: "Interval (ms)",
         mirrorTouchHint:
             "With touch input on, click (tap), drag (swipe) or press-and-hold 600ms+ (long press) directly on the screen. Right-click = Back.",
@@ -379,6 +449,8 @@ const dict = {
         unlimited: "Unlimited",
         collectedLines: "Collected",
         showingLines: "Showing",
+        logSize: "Log size",
+        logFilePart: "Part",
         autoStopped: "Auto-stopped after the configured duration",
         logcatPickAppHint:
             "Select an app to show only its logs (filtered by PID; use Refresh PID to re-match).",
@@ -429,6 +501,69 @@ const dict = {
         hintParse: "Hint: the APK is corrupt or not a valid package.",
 
         installTitle: "Install APK",
+        installPath: "Install path",
+        installPathHint:
+            "Default is the SD card (/sdcard). If installation fails with a permission error, switch to /data/local/tmp.",
+
+        /* ===== TEST Script ===== */
+        testScriptTitle: "TEST Script",
+        testScriptIntro:
+            "Common test flows turned into buttons: log capture & pull, Monkey stability test, Bluetooth HCI logs, CPU/memory monitoring, and app management. All commands and package names are editable and saved in the browser.",
+        tsSectionLog: "1. Log capture & pull",
+        tsLogcatCommand: "Background logcat command",
+        tsLogcatCommandHint:
+            "Runs in the background on the device, output goes to /sdcard/yx_log/. e.g. logcat -v time",
+        tsStartLog: "Start log capture",
+        tsStopLog: "Stop (local state)",
+        tsClearDeviceLog: "Clear device log buffer",
+        tsPullPaths: "Paths to pull (one per line)",
+        tsPullToFolder: "Choose local folder & export",
+        tsPullDownload: "Pull & download (zip)",
+        tsRemoveLogs: "Clean device log folders",
+        tsCleanPaths: "Device paths to clean (one per line)",
+        tsRemoveLogsHint: "⚠️ Runs rm -rf — double-check the paths before clicking.",
+
+        tsSectionMonkey: "2. Monkey stability test",
+        tsMonkeyPackages: "Target packages (one per line)",
+        tsMonkeyArgs: "Monkey arguments",
+        tsMonkeyThrottle: "Throttle (ms)",
+        tsMonkeyEvents: "Event count",
+        tsMonkeyPreview: "Command preview",
+        tsRunMonkey: "Run Monkey in background",
+        tsStopMonkey: "Stop (local state)",
+
+        tsSectionHci: "3. Bluetooth HCI logs",
+        tsHciHint:
+            "Requires root. After enabling the switch, restart Bluetooth (or the device) to start recording HCI logs.",
+        tsEnableHci: "Enable HCI logs",
+        tsExportHci: "Export HCI logs",
+        tsExportHciToFolder: "Export to local folder",
+        tsRemoveHci: "Delete HCI logs",
+
+        tsSectionMonitor: "4. CPU / memory monitoring",
+        tsMonitorInterval: "Interval (s)",
+        tsStartMonitor: "Start monitoring",
+        tsStopMonitor: "Stop monitoring",
+        tsCpuUsage: "CPU usage trend",
+        tsMemUsage: "Memory usage trend",
+
+        tsSectionApps: "5. App management",
+        tsIncludeSystem: "Include system apps",
+        tsListApps: "List all app packages",
+        tsLaunchApp: "Launch app",
+        tsForceStop: "Force stop",
+        tsLaunchFirstStop: "Force stop before launch",
+        tsAppHint:
+            "Pick an app to launch or force stop it. A stopped app can be brought back by clicking Launch.",
+
+        tsSaveConfig: "Save config",
+        tsResetConfig: "Reset defaults",
+        tsOutput: "Output",
+        tsClearOutput: "Clear output",
+        tsNotConnected: "Please connect a device first.",
+
+        installPathSd: "SD card (/sdcard)",
+        installPathTmp: "/data/local/tmp",
         chooseApk: "Choose APK file",
         installing: "Installing…",
         installDone: "Installed",

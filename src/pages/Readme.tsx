@@ -3,13 +3,27 @@ import { observer } from "mobx-react-lite";
 import { Diagnostics } from "../components/Diagnostics";
 import { i18n } from "../state/i18n";
 
-const sectionStyle = { fontSize: 17, fontWeight: 600, margin: "8px 0 0" } as const;
-const bodyStyle = { color: "#323130", lineHeight: 1.8, margin: 0 } as const;
+const sectionStyle = {
+    fontSize: 17,
+    fontWeight: 600,
+    margin: "8px 0 0",
+    // flexShrink: 0 —— 关键！
+    // 本页根容器是 height:100% 的 flex 纵向布局，子项默认 flex-shrink:1，
+    // 内容超高时会被压缩，导致 <pre> 只显示半行（用户反馈的「显示不全」）。
+    flexShrink: 0,
+} as const;
+const bodyStyle = {
+    color: "#323130",
+    lineHeight: 1.8,
+    margin: 0,
+    flexShrink: 0,
+} as const;
 const listStyle = {
     color: "#323130",
     lineHeight: 1.9,
     margin: 0,
     paddingLeft: 20,
+    flexShrink: 0,
 } as const;
 const codeStyle = {
     background: "#f3f2f1",
@@ -17,6 +31,18 @@ const codeStyle = {
     borderRadius: 3,
     fontFamily: "Consolas, Menlo, monospace",
     fontSize: 12,
+} as const;
+/** 命令代码块统一样式（不收缩、可横向滚动） */
+const preStyle = {
+    background: "#1e1e1e",
+    color: "#d4d4d4",
+    padding: 10,
+    borderRadius: 4,
+    fontSize: 12.5,
+    margin: 0,
+    flexShrink: 0,
+    overflowX: "auto",
+    whiteSpace: "pre",
 } as const;
 
 export const ReadmePage = observer(function ReadmePage() {
@@ -84,17 +110,7 @@ export const ReadmePage = observer(function ReadmePage() {
                     ? "最常见的原因是：设备已被本机的 adb server（或其他程序）占用，浏览器会提示「设备已被占用 / 访问被拒绝」。解决办法是在本机命令行执行："
                     : "The most common cause is that the device is already held by the local adb server (or another program), which surfaces as “device in use / access denied”. Fix it from your terminal:"}
             </p>
-            <pre
-                style={{
-                    background: "#1e1e1e",
-                    color: "#d4d4d4",
-                    padding: 10,
-                    borderRadius: 4,
-                    fontSize: 12.5,
-                    margin: 0,
-                    overflow: "auto",
-                }}
-            >
+            <pre style={preStyle}>
 {`adb kill-server`}
             </pre>
             <p style={bodyStyle}>
@@ -159,6 +175,12 @@ export const ReadmePage = observer(function ReadmePage() {
                         : ": level toggles, app detection, keyword/tag filters, and streaming logs to a local folder in 20MB parts."}
                 </li>
                 <li>
+                    <b>{zh ? "TEST 脚本" : "TEST Script"}</b>
+                    {zh
+                        ? "：把常用测试流程做成按钮 —— 日志采集与拉取到电脑、Monkey 稳定性测试、蓝牙 HCI 日志、CPU/内存监控、应用管理。所有命令与包名都可改。"
+                        : ": common test flows as buttons — log capture & pull to PC, Monkey stability test, Bluetooth HCI logs, CPU/memory monitoring, app management. All commands and packages are editable."}
+                </li>
+                <li>
                     <b>{zh ? "安装 APK" : "Install APK"}</b>
                     {zh
                         ? "：推送至 /data/local/tmp 并安装，显示进度与失败原因。"
@@ -207,6 +229,141 @@ export const ReadmePage = observer(function ReadmePage() {
             {/* ── 连接诊断 ── */}
             <h2 style={sectionStyle}>{zh ? "五、连接诊断" : "5. Connection diagnostics"}</h2>
             <Diagnostics />
+
+            {/* ── TEST 脚本使用说明 ── */}
+            <h2 style={sectionStyle}>{zh ? "六、TEST 脚本使用教程" : "6. TEST Script guide"}</h2>
+            <p style={bodyStyle}>
+                {zh
+                    ? "「TEST 脚本」页把项目里常用的 .bat / .sh 流程固化成了按钮。所有输入框都可以改成你自己项目的值，点「保存配置」后会存在浏览器里，下次打开还在。"
+                    : "The TEST Script page turns the project's .bat/.sh flows into buttons. Every input is editable; click Save config to persist settings in your browser."}
+            </p>
+
+            <h3 style={{ ...sectionStyle, fontSize: 15 }}>
+                {zh ? "① 日志采集与拉取" : "① Log capture & pull"}
+            </h3>
+            <ol style={listStyle}>
+                <li>
+                    {zh ? "「后台 logcat 命令」默认 " : "Background logcat command defaults to "}
+                    <C>logcat -v time</C>
+                    {zh
+                        ? "，会在设备后台运行并把输出写到 /sdcard/yx_log/。"
+                        : ", runs in the background and writes output to /sdcard/yx_log/."}
+                </li>
+                <li>
+                    {zh
+                        ? "点「开始采集日志」启动；「清空设备日志缓冲」等价于 adb logcat -c。"
+                        : "Click Start log capture; Clear device log buffer equals adb logcat -c."}
+                </li>
+                <li>
+                    {zh
+                        ? "「要拉取到电脑的路径」支持多行，每行一个设备目录（默认已按你的脚本预置 /data/yx_log、/data/anr、/data/tombstones 等）。"
+                        : "Paths to pull accept multiple lines, one device directory each (pre-filled from your scripts: /data/yx_log, /data/anr, /data/tombstones, …)."}
+                </li>
+                <li>
+                    <b>{zh ? "选择本地文件夹并导出" : "Choose local folder & export"}</b>
+                    {zh
+                        ? "：选一个电脑上的文件夹，日志会直接写进去（推荐，日志大时不占浏览器内存）。"
+                        : ": pick a folder on your PC and logs are written directly into it (recommended for large logs)."}
+                </li>
+                <li>
+                    <b>{zh ? "拉取并下载（zip）" : "Pull & download (zip)"}</b>
+                    {zh
+                        ? "：不想选文件夹时，会把每个目录打包成 zip 直接下载。"
+                        : ": without picking a folder, each directory is packed into a zip and downloaded."}
+                </li>
+                <li>
+                    <b>{zh ? "清理设备日志目录" : "Clean device log folders"}</b>
+                    {zh
+                        ? "：对「要清理的设备路径」执行 rm -rf。⚠️ 请先核对路径，这是不可撤销操作。"
+                        : ": runs rm -rf on the clean paths. ⚠️ Verify the paths first — this is irreversible."}
+                </li>
+            </ol>
+
+            <h3 style={{ ...sectionStyle, fontSize: 15 }}>
+                {zh ? "② Monkey 稳定性测试" : "② Monkey stability test"}
+            </h3>
+            <ol style={listStyle}>
+                <li>
+                    {zh
+                        ? "「被测应用包名」每行一个，默认已按你的脚本填入 yaxon 系列包名。"
+                        : "Target packages, one per line; pre-filled with your yaxon package list."}
+                </li>
+                <li>
+                    {zh
+                        ? "「Monkey 参数」「事件间隔(ms)」「事件总数」都可改，下方会实时显示最终命令预览。"
+                        : "Monkey arguments, throttle and event count are editable; a live command preview is shown."}
+                </li>
+                <li>
+                    {zh
+                        ? "点「后台运行 Monkey」会在设备后台启动，输出写入 /sdcard/yx_log/。"
+                        : "Run Monkey in background starts it on the device; output goes to /sdcard/yx_log/."}
+                </li>
+            </ol>
+
+            <h3 style={{ ...sectionStyle, fontSize: 15 }}>
+                {zh ? "③ 蓝牙 HCI 日志" : "③ Bluetooth HCI logs"}
+            </h3>
+            <ol style={listStyle}>
+                <li>
+                    {zh
+                        ? "「开启 HCI 日志」执行 setprop persist.bluetooth.btsnoopenable true；之后需重启蓝牙或设备才会开始记录。"
+                        : "Enable HCI logs runs setprop persist.bluetooth.btsnoopenable true; restart Bluetooth (or the device) to start recording."}
+                </li>
+                <li>
+                    {zh
+                        ? "「导出 HCI 日志」/「导出到本地文件夹」会把 /data/misc/bluetooth/logs 拉取下来（需要 root）。"
+                        : "Export HCI logs / Export to local folder pulls /data/misc/bluetooth/logs (root required)."}
+                </li>
+                <li>
+                    {zh ? "「删除 HCI 日志」清空该目录。" : "Delete HCI logs clears that directory."}
+                </li>
+            </ol>
+
+            <h3 style={{ ...sectionStyle, fontSize: 15 }}>
+                {zh ? "④ CPU / 内存占用监控" : "④ CPU / memory monitoring"}
+            </h3>
+            <ol style={listStyle}>
+                <li>
+                    {zh
+                        ? "设定采样间隔（秒）后点「开始监控」，会周期性执行 dumpsys cpuinfo / dumpsys meminfo。"
+                        : "Set the interval (seconds) and click Start monitoring; it periodically runs dumpsys cpuinfo / dumpsys meminfo."}
+                </li>
+                <li>
+                    {zh
+                        ? "上方以趋势条显示 CPU% 与内存% 变化，下方显示最近一次原始采样结果。"
+                        : "Trend bars show CPU% and memory% over time; the latest raw samples are shown below."}
+                </li>
+            </ol>
+
+            <h3 style={{ ...sectionStyle, fontSize: 15 }}>
+                {zh ? "⑤ 应用管理" : "⑤ App management"}
+            </h3>
+            <ol style={listStyle}>
+                <li>
+                    {zh
+                        ? "「包含系统应用」开关决定是列全部应用还是仅第三方；点「列出所有应用包名」加载。"
+                        : "Include system apps decides whether to list all apps or third-party only; click List all app packages to load."}
+                </li>
+                <li>
+                    {zh
+                        ? "在搜索框按包名过滤后下拉选择；点「启动应用」拉起，点「强制停止」结束。"
+                        : "Filter by package name, pick it in the dropdown, then Launch app or Force stop."}
+                </li>
+                <li>
+                    {zh
+                        ? "勾选「启动前先强制停止」可在拉起前先 force-stop，确保冷启动。"
+                        : "Force stop before launch ensures a cold start."}
+                </li>
+            </ol>
+
+            <h3 style={{ ...sectionStyle, fontSize: 15 }}>
+                {zh ? "⑥ 安装 APK 的安装路径" : "⑥ APK install path"}
+            </h3>
+            <p style={bodyStyle}>
+                {zh
+                    ? "安装 APK 页新增了「安装路径」下拉：默认 SD 卡（/sdcard），若推送失败或权限不足可改为 /data/local/tmp。"
+                    : "The Install APK page now has an install-path dropdown: default SD card (/sdcard); switch to /data/local/tmp if pushing fails."}
+            </p>
 
             <p style={{ ...bodyStyle, color: "#a19f9d", fontSize: 12, marginTop: 8 }}>
                 {zh ? "反馈与源码：" : "Feedback & source: "}

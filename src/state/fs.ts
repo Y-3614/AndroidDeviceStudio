@@ -442,6 +442,114 @@ class FsStore {
             throw e;
         }
     }
+
+    /**
+     * 下载设备上**任意绝对路径**（文件或目录）。
+     * 供「TEST 脚本」页拉取日志目录使用。
+     * - 文件 → 直接返回 Blob
+     * - 目录 → 递归收集后打包为 zip
+     */
+    async pullPath(
+        remotePath: string,
+        onProgress?: (stage: string) => void,
+    ): Promise<{ blob: Blob; name: string }> {
+        const adb = this.adb;
+        if (!adb) throw new Error("未连接");
+        onProgress?.(remotePath);
+        const isDir = await this.isRemoteDirectory(adb, remotePath);
+        const base = remotePath.replace(/\/+$/, "").split("/").pop() || "log";
+        if (!isDir) {
+            const blob = await this.downloadPath(adb, remotePath);
+            return { blob, name: base };
+        }
+        const files = await this.collectRemoteDir(adb, remotePath, base);
+        const zipped = await zipFiles(files);
+        return { blob: zipped, name: `${base}.zip` };
+    }
+
+    /** 判断远端路径是否为目录（用 ls -ld 的权限首字符） */
+    async isRemoteDirectory(adb: Adb, path: string): Promise<boolean> {
+        try {
+            const out = await shell(
+                adb,
+                this.needSuChannel
+                    ? `su -c ${q(`ls -ld ${q(path)}`)}`
+                    : `ls -ld ${q(path)}`,
+            );
+            // 形如 drwxr-xr-x ...
+            return out.trim().startsWith("d");
+        } catch {
+            return false;
+        }
+    }
+
+    /** 递归收集远端目录下所有文件（供 zip 打包） */
+    async collectRemoteDir(
+        adb: Adb,
+        dirPath: string,
+        prefix: string,
+        onProgress?: (file: string) => void,
+    ): Promise<{ name: string; blob: Blob }[]> {
+        const files: { name: string; blob: Blob }[] = [];
+        const walk = async (current: string, rel: string) => {
+            const entries = await this.listRemote(adb, current);
+            for (const e of entries) {
+                if (e.name === "." || e.name === "..") continue;
+                const childRel = rel ? `${rel}/${e.name}` : e.name;
+                const childPath = resolve(current, e.name);
+                if (isDirectory(e.type)) {
+                    await walk(childPath, childRel);
+                } else {
+                    onProgress?.(childPath);
+                    const blob = await this.downloadPath(adb, childPath);
+                    files.push({ name: childRel, blob });
+                }
+            }
+        };
+        await walk(dirPath, prefix);
+        return files;
+    }
+
+    /** 列出远端目录（自动选择 sync 或 su 通道） */
+    private async listRemote(adb: Adb, dirPath: string): Promise<FsEntry[]> {
+        if (this.needSuChannel) {
+            const out = await su(adb, `ls -la ${q(dirPath)}`);
+            const result: FsEntry[] = [];
+            for (const line of out.split("\n")) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith("total")) continue;
+                const e = this.parseLsLine(trimmed, dirPath);
+                if (e) result.push(e);
+            }
+            return result;
+        }
+        const sync = await adb.sync();
+        try {
+            return (await sync.readdir(dirPath)).map((e) =>
+                this.toEntry(e, dirPath),
+            );
+        } catch (e) {
+            // 权限不足时自动降级到 su 通道再试一次
+            if (!this.needSuChannel) {
+                try {
+                    const out = await su(adb, `ls -la ${q(dirPath)}`);
+                    const result: FsEntry[] = [];
+                    for (const line of out.split("\n")) {
+                        const trimmed = line.trim();
+                        if (!trimmed || trimmed.startsWith("total")) continue;
+                        const e2 = this.parseLsLine(trimmed, dirPath);
+                        if (e2) result.push(e2);
+                    }
+                    return result;
+                } catch {
+                    /* 仍失败则抛出原错误 */
+                }
+            }
+            throw e;
+        } finally {
+            sync.dispose();
+        }
+    }
 }
 
 function base64ToBlob(b64: string): Blob {

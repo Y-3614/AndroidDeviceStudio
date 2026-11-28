@@ -14,6 +14,7 @@ import { PrivilegePage } from "./pages/Privilege";
 import { ReadmePage } from "./pages/Readme";
 import { ScreenCapturePage } from "./pages/ScreenCapture";
 import { TerminalPage } from "./pages/Terminal";
+import { TestScriptPage } from "./pages/TestScript";
 import { WifiAdbPage } from "./pages/WifiAdb";
 import { useRoute } from "./state/router";
 
@@ -57,6 +58,9 @@ export const App = observer(function App() {
             break;
         case "logcat":
             page = <LogcatPage />;
+            break;
+        case "test-script":
+            page = <TestScriptPage />;
             break;
         case "install":
             page = <InstallPage />;

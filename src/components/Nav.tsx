@@ -25,6 +25,7 @@ const ROUTES: RouteDef[] = [
     { key: "mirror", icon: "Devices2", labelKey: "mirror" },
     { key: "screen-capture", icon: "Camera", labelKey: "screenCapture" },
     { key: "logcat", icon: "Articles", labelKey: "logcat" },
+    { key: "test-script", icon: "Script", labelKey: "testScript" },
     { key: "install", icon: "Package", labelKey: "install" },
 ];
 

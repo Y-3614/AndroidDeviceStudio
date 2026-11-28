@@ -11,7 +11,8 @@ export type Route =
     | "install"
     | "privilege"
     | "power"
-    | "wifi-adb";
+    | "wifi-adb"
+    | "test-script";
 
 const VALID: Route[] = [
     "readme",
@@ -25,6 +26,7 @@ const VALID: Route[] = [
     "privilege",
     "power",
     "wifi-adb",
+    "test-script",
 ];
 
 function readHash(): Route {
