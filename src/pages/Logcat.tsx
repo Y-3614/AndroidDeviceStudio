@@ -401,6 +401,34 @@ export const LogcatPage = observer(function LogcatPage() {
                     styles={{ root: { width: 120 } }}
                     disabled={logcat.running}
                 />
+                {logcat.running && logcat.autoStopMinutes > 0 && (
+                    <span
+                        style={{
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "#c19c00",
+                            background: "#fff4ce",
+                            padding: "2px 8px",
+                            borderRadius: 4,
+                        }}
+                    >
+                        {t.autoStopRemain} {logcat.autoStopRemainSec}s
+                    </span>
+                )}
+                {logcat.autoStopped && !logcat.running && (
+                    <span
+                        style={{
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "#107c10",
+                            background: "#dff6dd",
+                            padding: "2px 8px",
+                            borderRadius: 4,
+                        }}
+                    >
+                        {t.autoStoppedHint}
+                    </span>
+                )}
             </Stack>
 
             <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.logFolderHint}</span>

@@ -59,24 +59,36 @@ export const LOGCAT_BUFFERS = [
  * 加上每个 chunk 都触发一次全量 MobX 通知与重新渲染，必然卡死。
  * 现在内存中只保留最近 N 行；**完整日志通过「选择文件夹落盘」获得**。
  */
-const MAX_MEMORY_LINES = 8000;
-/** 仅渲染上限（DOM 节点数），进一步低于内存上限以保证滚动流畅 */
-const MAX_DISPLAY = 1500;
+const MAX_MEMORY_LINES = 4000;
+/**
+ * 仅渲染上限（DOM 节点数）。
+ *
+ * ⚠️ 这是「整机卡顿」的**最主要**原因：可视区域放不下几百行，
+ * 却渲染上千个 DOM 节点，每 500ms 全部重建一次，CPU 直接跑满。
+ * 现在收紧到 300 行 —— 超出部分用「已省略 N 行」提示，完整内容在落盘文件里。
+ */
+const MAX_DISPLAY = 300;
 /** 批量刷新间隔：把高频 chunk 合并成一次 UI 更新，避免每个分片都 re-render */
-const VIEW_FLUSH_INTERVAL = 300; // ms
+const VIEW_FLUSH_INTERVAL = 500; // ms
 const FLUSH_BYTES = 256 * 1024;
 const FILE_LIMIT = 20 * 1024 * 1024; // 20MB 分片
 /**
  * 真实提交到磁盘的间隔。
  *
- * ⚠️ 关键：File System Access API 的 `createWritable()` 写入的是**临时 swap 文件**，
- * 只有 `close()` 时才把内容真正替换进目标文件。
- * 旧实现只在 20MB 分片或 stop() 时才 close →
- * 采集过程中在文件管理器里**根本看不到文件**（用户反馈的「没有 log」）。
- * 现在改为：保持句柄常开，每隔 COMMIT_INTERVAL 主动「写一批 → close 提交 → 重新打开」，
- * 于是文件一采集就存在，并随时间持续增长。
+ * ⚠️ 两个必须说清的机制（都踩过坑）：
+ *
+ * 1) File System Access API 的 `createWritable()` 写入的是**临时 swap 文件**
+ *    （目录里显示为 `xxx.txt.crswap`），只有 `close()` 才把内容原子替换进目标文件。
+ *    旧实现只在 20MB 分片或 stop() 时才 close →
+ *    采集过程中在文件管理器里**根本看不到文件**（用户反馈的「没有 log」）。
+ *
+ * 2) `createWritable({ keepExistingData: true })` 会把**已有内容完整复制**到 swap 文件。
+ *    因此 close 得越频繁，磁盘 IO 与 CPU 开销越大 ——
+ *    旧实现每 3 秒一次，大文件时这是「卡顿」的重要来源。
+ *    现在拉长到 12 秒；且只有真的有新数据时才提交（避免空转复制）。
+ *    停止采集时仍会立即 close，保证最后一批数据落盘。
  */
-const COMMIT_INTERVAL = 3000; // ms
+const COMMIT_INTERVAL = 12000; // ms
 
 /** UTF-8 编码器：seek 需要字节偏移，不能用字符串长度（中文是多字节） */
 const UTF8 = new TextEncoder();
@@ -195,10 +207,23 @@ class LogFileWriter {
     private part = 0;
     private sessionName = "";
     private timer: ReturnType<typeof setInterval> | undefined;
-    private flushing = false;
     private lastError: string | undefined;
     /** 上次提交时的分片字节数（用于避免空提交） */
     private lastCommittedBytes = -1;
+
+    /**
+     * 串行化闸门（互斥锁）。
+     *
+     * ⚠️ 这是「Cannot close a closed or closing stream」的根因修复。
+     *
+     * 旧实现里 `push()`（大流量时）和定时器都会直接触发 `tick()`，
+     * 两者可能**并发**跑到 `commit()`：一个正在 `close()` 旧流，
+     * 另一个同时 `write()` / 再次 `close()` 同一个流 → 抛「已关闭/正在关闭」。
+     *
+     * 现在所有写盘动作（flush / commit / roll / stop）都排进同一条 Promise 链，
+     * 前一个跑完才执行下一个，从根上消除竞态。
+     */
+    private queue: Promise<void> = Promise.resolve();
 
     get enabled(): boolean {
         return !!this.dir;
@@ -221,6 +246,14 @@ class LogFileWriter {
     /** 最近一次写盘错误（用于 UI 提示） */
     get error(): string | undefined {
         return this.lastError;
+    }
+
+    /** 把一个写盘动作串行追加到队列，返回其完成 Promise */
+    private enqueue(task: () => Promise<void>): Promise<void> {
+        this.queue = this.queue.then(task).catch((e) => {
+            this.lastError = e instanceof Error ? e.message : String(e);
+        });
+        return this.queue;
     }
 
     async chooseDirectory(): Promise<string | undefined> {
@@ -265,19 +298,18 @@ class LogFileWriter {
         this.lastError = undefined;
         this.pending = [];
         this.pendingBytes = 0;
+        this.queue = Promise.resolve();
         const d = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
         this.sessionName = `logcat-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(
             d.getDate(),
         )}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
         if (this.dir) {
-            try {
+            await this.enqueue(async () => {
                 await this.openPart();
                 // 立刻创建一个空文件并提交，保证目录里马上能看到
-                await this.commit();
-            } catch (e) {
-                this.lastError = e instanceof Error ? e.message : String(e);
-            }
+                await this.doCommit();
+            });
         }
         this.timer = setInterval(() => {
             void this.tick();
@@ -305,27 +337,30 @@ class LogFileWriter {
         }
     }
 
-    private async closeFile() {
-        if (this.writable) {
-            try {
-                // close() 才真正把 swap 文件提交到磁盘
-                await this.writable.close();
-            } catch (e) {
-                this.lastError = e instanceof Error ? e.message : String(e);
-            }
-            this.writable = undefined;
+    /** 关闭当前流（close 才真正把 swap 文件提交到磁盘）—— 必须已持有队列 */
+    private async closeFileInner() {
+        const w = this.writable;
+        this.writable = undefined;
+        if (!w) return;
+        try {
+            await w.close();
+        } catch (e) {
+            // 流若已异常关闭，仅记录错误，不再重复 close
+            this.lastError = e instanceof Error ? e.message : String(e);
         }
     }
 
-    /** 定时任务：写盘 + 提交，保证磁盘上文件持续增长 */
-    private async tick() {
-        await this.flush();
-        // 只有在真的有新数据写入时才提交（close + 重开），避免空转复制文件
-        if (this.currentBytes !== this.lastCommittedBytes) {
-            await this.commit();
-            this.lastCommittedBytes = this.currentBytes;
-        }
-        await this.rollIfNeeded();
+    /** 定时任务：写盘 + 提交，保证磁盘上文件持续增长（串行执行） */
+    private tick(): Promise<void> {
+        return this.enqueue(async () => {
+            await this.doFlush();
+            // 只在真的有新数据写入时才提交（close + 重开），避免空转复制文件
+            if (this.currentBytes !== this.lastCommittedBytes) {
+                await this.doCommit();
+                this.lastCommittedBytes = this.currentBytes;
+            }
+            await this.doRollIfNeeded();
+        });
     }
 
     /** 追加一批行（进入内存缓冲） */
@@ -334,17 +369,16 @@ class LogFileWriter {
         this.pending.push(...lines);
         for (const l of lines) this.pendingBytes += l.length + 1;
         if (this.pendingBytes >= FLUSH_BYTES) {
-            // 大流量时立即写 + 提交，避免内存堆积
+            // 大流量时立即排队写盘（队列保证不会与定时器并发）
             void this.tick();
         }
     }
 
-    /** 把缓冲写进 swap 文件（尚未提交到磁盘） */
-    async flush() {
-        if (!this.dir || !this.writable || this.flushing || this.pending.length === 0) {
+    /** 把缓冲写进 swap 文件（尚未提交到磁盘）—— 必须已持有队列 */
+    private async doFlush() {
+        if (!this.dir || !this.writable || this.pending.length === 0) {
             return;
         }
-        this.flushing = true;
         try {
             const text = this.pending.join("\n") + "\n";
             this.pending = [];
@@ -355,19 +389,17 @@ class LogFileWriter {
             this.totalBytes += n;
         } catch (e) {
             this.lastError = e instanceof Error ? e.message : String(e);
-        } finally {
-            this.flushing = false;
         }
     }
 
-    /** close() 提交到磁盘，然后以追加模式重新打开 */
-    private async commit() {
+    /** close() 提交到磁盘，然后以追加模式重新打开 —— 必须已持有队列 */
+    private async doCommit() {
         if (!this.writable) return;
         // 还有未写的缓冲，先写掉再提交
         if (this.pending.length > 0) {
-            await this.flush();
+            await this.doFlush();
         }
-        await this.closeFile();
+        await this.closeFileInner();
         try {
             await this.openPart();
         } catch (e) {
@@ -375,15 +407,15 @@ class LogFileWriter {
         }
     }
 
-    private async rollIfNeeded() {
+    private async doRollIfNeeded() {
         if (this.currentBytes < FILE_LIMIT) return;
-        await this.closeFile();
+        await this.closeFileInner();
         this.part += 1;
         this.currentBytes = 0;
         this.lastCommittedBytes = 0;
         try {
             await this.openPart();
-            await this.commit();
+            await this.doCommit();
         } catch (e) {
             this.lastError = e instanceof Error ? e.message : String(e);
         }
@@ -394,9 +426,12 @@ class LogFileWriter {
             clearInterval(this.timer);
             this.timer = undefined;
         }
-        await this.flush();
-        // 停止时必须 close，把最后一批数据真正落盘
-        await this.closeFile();
+        // 排到队列末尾执行，保证在途的写操作先完成
+        await this.enqueue(async () => {
+            await this.doFlush();
+            // 停止时必须 close，把最后一批数据真正落盘
+            await this.closeFileInner();
+        });
         this.pending = [];
         this.pendingBytes = 0;
     }
@@ -445,6 +480,10 @@ class LogcatStore {
     // ---- 时间限制 ----
     /** 自动停止分钟数（0 = 不限制） */
     autoStopMinutes = 0;
+    /** 自动停止剩余秒数（运行中且设了时长时递减，用于 UI 显示倒计时） */
+    autoStopRemainSec = 0;
+    /** 是否因到时而自动停止（用于给用户提示） */
+    autoStopped = false;
 
     // 以下为内部实现字段（在 makeAutoObservable 中显式声明为非响应式）
     abort: AbortController | undefined;
@@ -646,12 +685,26 @@ class LogcatStore {
         this.startViewTimer();
         await this.writer.start();
 
-        // 自动停止计时
+        // 自动停止计时（含可见倒计时）
+        runInAction(() => {
+            this.autoStopped = false;
+            this.autoStopRemainSec = this.autoStopMinutes * 60;
+        });
         if (this.autoStopMinutes > 0) {
-            this.autoStopTimer = setTimeout(
-                () => void this.stop(),
-                this.autoStopMinutes * 60 * 1000,
-            );
+            this.autoStopTimer = setInterval(() => {
+                runInAction(() => {
+                    this.autoStopRemainSec = Math.max(
+                        0,
+                        this.autoStopRemainSec - 1,
+                    );
+                });
+                if (this.autoStopRemainSec <= 0) {
+                    runInAction(() => {
+                        this.autoStopped = true;
+                    });
+                    void this.stop();
+                }
+            }, 1000);
         }
 
         const cmd = this.buildCommand();
@@ -774,9 +827,12 @@ class LogcatStore {
         // 先停掉节流并刷出剩余日志，再关闭文件
         this.stopViewTimer();
         if (this.autoStopTimer) {
-            clearTimeout(this.autoStopTimer);
+            clearInterval(this.autoStopTimer);
             this.autoStopTimer = undefined;
         }
+        runInAction(() => {
+            this.autoStopRemainSec = 0;
+        });
         await this.writer.stop();
         runInAction(() => {
             this.running = false;

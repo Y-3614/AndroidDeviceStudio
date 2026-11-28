@@ -9,11 +9,12 @@ import { shell } from "./privilege";
  * TEST 脚本 store。
  *
  * 把原先散落在 .bat / .sh 里的常用测试流程固化成可配置、可一键执行的按钮：
- *  - 日志采集与拉取（含后台命令可改、日志清空）
- *  - Monkey 稳定性测试（包名与参数可改）
+ *  - 日志拉取（**每次新建「年月日_时分秒」子文件夹**，与 01_pull_log.bat 一致）
+ *  - 日志清理（相当于 02_rm_device_log_file.bat）
+ *  - Monkey 稳定性测试（包名与参数可改，含自检）
  *  - 蓝牙 HCI 日志（开启 / 导出 / 删除）
- *  - CPU 与内存占用监控（间隔可调）
- *  - 应用管理（列出包名 / 启动 / 强制停止）
+ *  - CPU 与内存占用监控（间隔可调，可导出选目录）
+ *  - 应用管理（列出 / 启动 / 进详情 / 强停 / 导出包名 txt）
  *
  * 参考脚本来源：`犀重智能座舱域控制器/d.monkey与内存的Adb命令测试脚本`
  */
@@ -23,7 +24,16 @@ function q(s: string): string {
     return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-const LS_KEY = "ads.testscript.config.v1";
+/** 生成本地文件夹名：YYYY-MM-DD_HH-MM-SS（与 01_pull_log.bat 的 %a% 对应） */
+export function timestampName(d = new Date()): string {
+    const p = (n: number) => String(n).padStart(2, "0");
+    return (
+        `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+        `_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
+    );
+}
+
+const LS_KEY = "ads.testscript.config.v2";
 
 /** 默认日志拉取路径（来自 01_pull_log.bat） */
 const DEFAULT_PULL_PATHS = [
@@ -35,6 +45,7 @@ const DEFAULT_PULL_PATHS = [
     "/data/tombstones",
     "/sdcard/yaxon",
     "/cluster_config",
+    "/sdcard/yx_log",
     "/data/yaxon",
 ].join("\n");
 
@@ -48,11 +59,21 @@ const DEFAULT_CLEAN_PATHS = [
     "/data/tombstones",
     "/sdcard/yaxon",
     "/cluster_config/",
+    "/sdcard/yx_log/",
     "/data/yaxon",
 ].join("\n");
 
-/** 默认 Monkey 包名（来自 shell_cmd.sh 的 monkey 行） */
+/** 默认 Monkey 包名（来自 monkey-test.bat / shell_cmd.sh） */
 const DEFAULT_MONKEY_PACKAGES = [
+    "com.yaxon.misc_service",
+    "com.yaxon.launcher",
+    "com.yaxon.eq_service",
+    "com.yaxon.fota",
+    "com.yaxon.hvac",
+    "com.yaxon.pki",
+    "com.yaxon.camera",
+    "com.yaxon.datacenter_service",
+    "com.yaxon.setting",
     "com.yaxon.music",
     "com.yaxon.radio",
     "com.yaxon.video",
@@ -60,15 +81,7 @@ const DEFAULT_MONKEY_PACKAGES = [
     "com.yaxon.bluetooth",
     "com.yaxon.superstructure",
     "com.txznet.txz",
-    "com.yaxon.launcher",
     "com.title.mapautosdk",
-    "com.yaxon.hvac",
-    "com.yaxon.setting",
-    "com.yaxon.dvr",
-    "com.yaxon.pki",
-    "com.yaxon.tboxservice",
-    "com.yaxon.mcu_service",
-    "com.carota.seazon",
 ].join("\n");
 
 const DEFAULT_MONKEY_ARGS =
@@ -76,7 +89,7 @@ const DEFAULT_MONKEY_ARGS =
     "--kill-process-after-error --monitor-native-crashes " +
     "--pct-trackball 0 --pct-nav 0 --pct-majornav 10 --pct-anyevent 10 " +
     "--pct-syskeys 0 --pct-touch 40 --pct-motion 30 --pct-appswitch 10 " +
-    "--pct-flip 0 -v -v -v --throttle 500";
+    "--pct-flip 0 -v -v -v";
 
 /** HCI 日志目录（来自蓝牙脚本） */
 export const HCI_LOG_DIR = "/data/misc/bluetooth/logs";
@@ -87,17 +100,18 @@ export interface ScriptLogEntry {
     kind: "info" | "ok" | "err";
 }
 
+export type AppFilter = "all" | "third" | "system";
+
 class TestScriptStore {
-    // ---- 日志采集 ----
-    /** 后台 logcat 命令（可改） */
-    logcatCommand = "logcat -v time";
+    // ---- 日志拉取 ----
     /** 拉取路径列表（每行一个，可改） */
     pullPaths = DEFAULT_PULL_PATHS;
     /** 清理路径列表（每行一个，可改） */
     cleanPaths = DEFAULT_CLEAN_PATHS;
-    logRunning = false;
     pulling = false;
     pullProgress = "";
+    /** 最近一次拉取创建的本地子文件夹名（用于 UI 提示） */
+    lastPullFolder = "";
 
     // ---- Monkey ----
     monkeyPackages = DEFAULT_MONKEY_PACKAGES;
@@ -105,6 +119,8 @@ class TestScriptStore {
     monkeyThrottle = 500;
     monkeyEvents = 1200000;
     monkeyRunning = false;
+    /** 自检结果文本 */
+    monkeyCheck = "";
 
     // ---- 蓝牙 HCI ----
     hciExportProgress = "";
@@ -117,18 +133,23 @@ class TestScriptStore {
     /** 历史采样（用于绘制趋势，仅保留最近 N 条） */
     cpuHistory: number[] = [];
     memHistory: number[] = [];
+    /** 监控日志行（用于导出） */
+    monitorLog: string[] = [];
+    /** 上次采样时间 */
+    lastSampleAt = "";
 
     // ---- 应用管理 ----
     apps: { package: string; pid: number; system: boolean }[] = [];
     loadingApps = false;
-    includeSystemApps = false;
+    /** 应用过滤：全部 / 仅第三方 / 仅系统（默认仅第三方） */
+    appFilter: AppFilter = "third";
     selectedPackage = "";
     launchForceStop = false;
 
     // ---- 输出日志 ----
     output: ScriptLogEntry[] = [];
 
-    /** 监控定时器句柄（@observable，不影响渲染语义） */
+    /** 监控定时器句柄 */
     monitorTimer: ReturnType<typeof setInterval> | undefined;
 
     constructor() {
@@ -136,13 +157,12 @@ class TestScriptStore {
         this.load();
     }
 
-    /* ---------------- 持久化：让用户改过的配置下次还在 ---------------- */
+    /* ---------------- 持久化 ---------------- */
     private load() {
         try {
             const raw = localStorage.getItem(LS_KEY);
             if (!raw) return;
             const c = JSON.parse(raw) as Partial<TestScriptStore>;
-            if (typeof c.logcatCommand === "string") this.logcatCommand = c.logcatCommand;
             if (typeof c.pullPaths === "string") this.pullPaths = c.pullPaths;
             if (typeof c.cleanPaths === "string") this.cleanPaths = c.cleanPaths;
             if (typeof c.monkeyPackages === "string") this.monkeyPackages = c.monkeyPackages;
@@ -151,6 +171,8 @@ class TestScriptStore {
             if (typeof c.monkeyEvents === "number") this.monkeyEvents = c.monkeyEvents;
             if (typeof c.monitorIntervalSec === "number")
                 this.monitorIntervalSec = c.monitorIntervalSec;
+            if (c.appFilter === "all" || c.appFilter === "third" || c.appFilter === "system")
+                this.appFilter = c.appFilter;
         } catch {
             /* 配置损坏则用默认值 */
         }
@@ -161,7 +183,6 @@ class TestScriptStore {
             localStorage.setItem(
                 LS_KEY,
                 JSON.stringify({
-                    logcatCommand: this.logcatCommand,
                     pullPaths: this.pullPaths,
                     cleanPaths: this.cleanPaths,
                     monkeyPackages: this.monkeyPackages,
@@ -169,6 +190,7 @@ class TestScriptStore {
                     monkeyThrottle: this.monkeyThrottle,
                     monkeyEvents: this.monkeyEvents,
                     monitorIntervalSec: this.monitorIntervalSec,
+                    appFilter: this.appFilter,
                 }),
             );
             this.append("配置已保存到浏览器", "ok");
@@ -178,7 +200,6 @@ class TestScriptStore {
     }
 
     resetDefaults() {
-        this.logcatCommand = "logcat -v time";
         this.pullPaths = DEFAULT_PULL_PATHS;
         this.cleanPaths = DEFAULT_CLEAN_PATHS;
         this.monkeyPackages = DEFAULT_MONKEY_PACKAGES;
@@ -186,6 +207,7 @@ class TestScriptStore {
         this.monkeyThrottle = 500;
         this.monkeyEvents = 1200000;
         this.monitorIntervalSec = 10;
+        this.appFilter = "third";
         this.save();
     }
 
@@ -218,37 +240,7 @@ class TestScriptStore {
         return out;
     }
 
-    /* ================= 日志采集 ================= */
-
-    /** 后台开始采集日志（写入设备 /sdcard/yx_log） */
-    async startLogcat() {
-        const adb = this.adb;
-        if (!adb || this.logRunning) return;
-        try {
-            const dir = "/sdcard/yx_log";
-            await this.exec(`mkdir -p ${dir}`);
-            // 后台执行：nohup 形式，脱离当前会话
-            const cmd = `${this.logcatCommand} > ${dir}/logcat_$(date +%Y%m%d-%H%M%S).log 2>&1 &`;
-            this.append(`$ (后台) ${cmd}`);
-            // 用 pty 执行并立即返回，不等待输出结束
-            void adb.subprocess.noneProtocol.pty(`sh -c ${q(cmd)}`).catch(() => {
-                /* 后台任务，忽略结束 */
-            });
-            runInAction(() => {
-                this.logRunning = true;
-            });
-            this.append("日志采集已在设备后台启动", "ok");
-        } catch (e) {
-            this.append(`启动失败：${(e as Error).message}`, "err");
-        }
-    }
-
-    stopLogcat() {
-        runInAction(() => {
-            this.logRunning = false;
-        });
-        this.append("已停止本地记录的采集状态（设备端后台进程会继续，可用「清空日志」或重启终止）");
-    }
+    /* ================= 日志清理 ================= */
 
     /** 清空设备日志缓冲区 */
     async clearDeviceLog() {
@@ -284,6 +276,11 @@ class TestScriptStore {
 
     /**
      * 拉取设备日志目录到本地。
+     *
+     * ⚠️ 与 01_pull_log.bat 行为对齐：传入目录句柄时，
+     * **先在其中新建一个「年月日_时分秒」子文件夹**，再把所有日志拉进该子文件夹，
+     * 避免多轮拉取的文件混在同一层目录里。
+     *
      * @param dirHandle 用户选择的本地文件夹；不传则返回打包的 zip 供下载
      */
     async pullLogs(
@@ -300,9 +297,24 @@ class TestScriptStore {
         runInAction(() => {
             this.pulling = true;
             this.pullProgress = "";
+            this.lastPullFolder = "";
         });
-        const results: { name: string; blob: Blob }[] = [];
+
+        let target: FileSystemDirectoryHandle | undefined = dirHandle;
+        let folderLabel = "";
         try {
+            // 新建时间戳子文件夹
+            if (dirHandle) {
+                const stamp = timestampName();
+                target = await dirHandle.getDirectoryHandle(stamp, { create: true });
+                folderLabel = `${dirHandle.name}/${stamp}`;
+                runInAction(() => {
+                    this.lastPullFolder = folderLabel;
+                });
+                this.append(`已新建本地文件夹：${folderLabel}`, "ok");
+            }
+
+            const results: { name: string; blob: Blob }[] = [];
             for (const p of paths) {
                 try {
                     runInAction(() => {
@@ -315,18 +327,18 @@ class TestScriptStore {
                         });
                     });
                     if (blob.size === 0) {
-                        this.append(`  ↳ 跳过（空或不存在）`);
+                        this.append("  ↳ 跳过（空或不存在）");
                         continue;
                     }
-                    if (dirHandle) {
-                        const handle = await dirHandle.getFileHandle(name, {
+                    if (target) {
+                        const handle = await target.getFileHandle(name, {
                             create: true,
                         });
                         const w = await handle.createWritable();
                         await w.write(blob);
                         await w.close();
                         this.append(
-                            `  ↳ 已保存到本地：${dirHandle.name}/${name}（${(
+                            `  ↳ 已保存：${folderLabel || dirHandle!.name}/${name}（${(
                                 blob.size /
                                 1024 /
                                 1024
@@ -367,31 +379,127 @@ class TestScriptStore {
             .join(" ");
         return (
             `monkey ${pkgs} ${this.monkeyArgs} --throttle ${this.monkeyThrottle} ` +
-            `${this.monkeyEvents} --bugreport 12000000`
+            `${this.monkeyEvents}`
         );
     }
 
-    /** 后台执行 monkey 测试 */
+    /**
+     * Monkey 自检：确认设备已连接、monkey 命令存在、后台执行能力可用。
+     * 「点击无反应」通常是因为设备未就绪或 monkey 不存在 —— 先给出明确结论。
+     */
+    async selfCheckMonkey(): Promise<boolean> {
+        const adb = this.adb;
+        if (!adb) {
+            runInAction(() => {
+                this.monkeyCheck = "未连接设备";
+            });
+            this.append("自检：未连接设备", "err");
+            return false;
+        }
+        const lines: string[] = [];
+        let ok = true;
+        // ① monkey 是否存在
+        try {
+            const which = (await shell(adb, "which monkey || command -v monkey")).trim();
+            if (which) lines.push(`✓ monkey 可用：${which}`);
+            else {
+                lines.push("✗ 未找到 monkey 命令");
+                ok = false;
+            }
+        } catch (e) {
+            lines.push(`✗ monkey 探测失败：${(e as Error).message}`);
+            ok = false;
+        }
+        // ② 后台执行（sh + &）是否可用
+        try {
+            const out = (
+                await shell(adb, "sh -c 'echo ads_selfcheck_ok &' && sleep 0.2 && echo done")
+            ).trim();
+            if (/ads_selfcheck_ok|done/.test(out)) lines.push("✓ 后台执行通道可用");
+            else lines.push(`⚠ 后台执行返回异常：${out || "(空)"}`);
+        } catch (e) {
+            lines.push(`✗ 后台执行通道不可用：${(e as Error).message}`);
+            ok = false;
+        }
+        // ③ 落盘目录可写
+        try {
+            await shell(adb, "mkdir -p /sdcard/yx_log");
+            lines.push("✓ /sdcard/yx_log 可写");
+        } catch (e) {
+            lines.push(`⚠ /sdcard/yx_log 不可写：${(e as Error).message}`);
+        }
+        // ④ 包名是否存在于设备
+        const pkgs = this.monkeyPackages
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        if (pkgs.length) {
+            try {
+                const listed = await shell(adb, "pm list packages");
+                const present = pkgs.filter((p) => listed.includes(`package:${p}`));
+                lines.push(
+                    `• 目标包 ${pkgs.length} 个，设备上找到 ${present.length} 个` +
+                        (present.length < pkgs.length ? "（缺失的会被 monkey 忽略）" : ""),
+                );
+            } catch {
+                /* ignore */
+            }
+        }
+        runInAction(() => {
+            this.monkeyCheck = lines.join("\n");
+        });
+        for (const l of lines) this.append(`自检 ${l}`, l.startsWith("✗") ? "err" : "info");
+        return ok;
+    }
+
+    /** 后台执行 monkey 测试（结果写入设备 /sdcard/yx_log） */
     async runMonkey() {
         const adb = this.adb;
-        if (!adb || this.monkeyRunning) return;
+        if (!adb) {
+            this.append("Monkey 启动失败：未连接设备", "err");
+            return;
+        }
+        if (this.monkeyRunning) return;
         const cmd = this.buildMonkeyCommand();
+        this.append("$ (后台) " + cmd);
         try {
-            this.append("$ (后台) " + cmd);
             const dir = "/sdcard/yx_log";
-            await this.exec(`mkdir -p ${dir}`).catch(() => "");
-            const wrapped = `${cmd} > ${dir}/monkey_$(date +%Y%m%d-%H%M%S).log 2>&1 &`;
+            await shell(adb, `mkdir -p ${dir}`).catch(() => "");
+            const logName = `monkey_${timestampName().replace(/[-:]/g, "")}.log`;
+            const wrapped = `${cmd} > ${dir}/${logName} 2>&1 &`;
+            // 后台执行并立即返回；不等待命令结束
             void adb.subprocess.noneProtocol
                 .pty(`sh -c ${q(wrapped)}`)
                 .catch(() => {
-                    /* 后台任务 */
+                    /* 后台任务，忽略流结束 */
                 });
             runInAction(() => {
                 this.monkeyRunning = true;
             });
-            this.append("Monkey 测试已在设备后台启动", "ok");
+            this.append(`Monkey 已在设备后台启动，日志：${dir}/${logName}`, "ok");
+            // 2 秒后确认进程确实起来了（自检兼容）
+            setTimeout(() => {
+                void this.verifyMonkeyRunning();
+            }, 2500);
         } catch (e) {
             this.append(`Monkey 启动失败：${(e as Error).message}`, "err");
+            runInAction(() => {
+                this.monkeyRunning = false;
+            });
+        }
+    }
+
+    /** 确认 monkey 进程是否已在设备上运行 */
+    private async verifyMonkeyRunning() {
+        const adb = this.adb;
+        if (!adb) return;
+        try {
+            const out = await shell(adb, "ps -A -o NAME | grep -c monkey");
+            const n = Number(out.trim().split("\n").pop()) || 0;
+            if (n > 0) this.append("✓ 已确认 monkey 进程在设备上运行", "ok");
+            else this.append("⚠ 未检测到 monkey 进程，请检查包名是否存在于设备上（可先点「自检」）", "err");
+        } catch {
+            /* 老设备可能不支持 ps -A，忽略 */
         }
     }
 
@@ -400,6 +508,19 @@ class TestScriptStore {
             this.monkeyRunning = false;
         });
         this.append("已停止本地记录（设备端 monkey 需 kill 或重启终止）");
+    }
+
+    /** 强杀设备上的 monkey 进程 */
+    async killMonkey() {
+        try {
+            await this.exec("pkill -f monkey || killall monkey", "结束 monkey 进程");
+            runInAction(() => {
+                this.monkeyRunning = false;
+            });
+            this.append("已尝试结束设备上的 monkey 进程", "ok");
+        } catch (e) {
+            this.append(`结束失败：${(e as Error).message}`, "err");
+        }
     }
 
     /* ================= 蓝牙 HCI ================= */
@@ -467,26 +588,29 @@ class TestScriptStore {
     async sampleOnce() {
         const adb = this.adb;
         if (!adb) throw new Error("未连接设备");
-        // CPU：取 dumpsys cpuinfo 的汇总行
+        const now = new Date();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const stamp =
+            `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+            `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+        // CPU
         try {
             const cpu = await shell(adb, "dumpsys cpuinfo");
             const lines = cpu.split("\n").filter((l) => l.trim());
-            // 取最前面的若干行（含总计）
             const text = lines.slice(0, 6).join("\n");
             const total = cpu.match(/([\d.]+)%\s+TOTAL/i);
+            const cpuVal = total ? Number(total[1]) : null;
             runInAction(() => {
                 this.cpuSample = text;
-                if (total) {
-                    this.cpuHistory = [
-                        ...this.cpuHistory.slice(-59),
-                        Number(total[1]),
-                    ];
+                if (cpuVal !== null) {
+                    this.cpuHistory = [...this.cpuHistory.slice(-59), cpuVal];
                 }
             });
         } catch (e) {
             this.append(`CPU 采样失败：${(e as Error).message}`, "err");
         }
-        // 内存：取 meminfo 的关键项
+        // 内存
         try {
             const mem = await shell(adb, "dumpsys meminfo");
             const want = ["Total RAM", "Free RAM", "Used RAM", "Lost RAM", "ZRAM"];
@@ -497,19 +621,38 @@ class TestScriptStore {
             const text = lines.join("\n");
             const totalKb = mem.match(/Total RAM:\s*(\d+)/i);
             const freeKb = mem.match(/Free RAM:\s*(\d+)/i);
+            let memVal: number | null = null;
+            if (totalKb && freeKb) {
+                memVal =
+                    ((Number(totalKb[1]) - Number(freeKb[1])) / Number(totalKb[1])) * 100;
+            }
             runInAction(() => {
                 this.memSample = text || mem.split("\n").slice(0, 5).join("\n");
-                if (totalKb && freeKb) {
-                    const used =
-                        ((Number(totalKb[1]) - Number(freeKb[1])) /
-                            Number(totalKb[1])) *
-                        100;
-                    this.memHistory = [...this.memHistory.slice(-59), Number(used.toFixed(1))];
+                if (memVal !== null) {
+                    this.memHistory = [
+                        ...this.memHistory.slice(-59),
+                        Number(memVal.toFixed(1)),
+                    ];
                 }
             });
         } catch (e) {
             this.append(`内存采样失败：${(e as Error).message}`, "err");
         }
+
+        // 记录到监控日志（用于导出）
+        runInAction(() => {
+            this.lastSampleAt = stamp;
+            const c = this.cpuHistory.length
+                ? this.cpuHistory[this.cpuHistory.length - 1]
+                : "";
+            const m = this.memHistory.length
+                ? this.memHistory[this.memHistory.length - 1]
+                : "";
+            this.monitorLog = [
+                ...this.monitorLog.slice(-4999),
+                `${stamp}\tCPU%\t${c}\tMEM%\t${m}`,
+            ];
+        });
     }
 
     async startMonitor() {
@@ -518,6 +661,7 @@ class TestScriptStore {
             this.monitoring = true;
             this.cpuHistory = [];
             this.memHistory = [];
+            this.monitorLog = [];
         });
         this.append(`开始监控（间隔 ${this.monitorIntervalSec}s）`, "ok");
         await this.sampleOnce().catch(() => "");
@@ -538,25 +682,74 @@ class TestScriptStore {
         this.append("已停止监控");
     }
 
+    /** 导出监控记录到本地文件夹（CSV） */
+    async exportMonitor(dirHandle?: FileSystemDirectoryHandle): Promise<boolean> {
+        if (this.monitorLog.length === 0) {
+            this.append("暂无监控数据可导出，请先开始监控", "err");
+            return false;
+        }
+        const header = "时间\tCPU占用%\t内存占用%";
+        const body = this.monitorLog.map((l) => l.replace(/\tCPU%\t/, "\t").replace(/\tMEM%\t/, "\t"));
+        const text = [header, ...body].join("\n");
+        const blob = new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8" });
+        const name = `monitor_${timestampName().replace(/[-:]/g, "")}.csv`;
+        try {
+            if (dirHandle) {
+                const handle = await dirHandle.getFileHandle(name, { create: true });
+                const w = await handle.createWritable();
+                await w.write(blob);
+                await w.close();
+                this.append(`监控记录已保存到 ${dirHandle.name}/${name}`, "ok");
+            } else {
+                saveBlob(blob, name);
+                this.append(`监控记录已下载：${name}`, "ok");
+            }
+            return true;
+        } catch (e) {
+            this.append(`导出失败：${(e as Error).message}`, "err");
+            return false;
+        }
+    }
+
     /* ================= 应用管理 ================= */
 
-    /** 列出设备上所有应用包名（可选择是否含系统应用） */
-    async loadApps(includeSystem = this.includeSystemApps) {
+    /** 列出设备上的应用包名（按当前过滤模式） */
+    async loadApps(filter: AppFilter = this.appFilter) {
         const adb = this.adb;
         if (!adb) return;
         runInAction(() => {
             this.loadingApps = true;
+            this.appFilter = filter;
         });
         try {
-            const flag = includeSystem ? "" : "-3";
+            const flag = filter === "all" ? "" : "-3";
             const out = await shell(adb, `pm list packages ${flag}`.trim());
-            const pkgs = out
+            let pkgs = out
                 .split("\n")
                 .map((l) => l.trim())
                 .filter((l) => l.startsWith("package:"))
                 .map((l) => l.slice("package:".length).trim())
-                .filter(Boolean)
-                .sort();
+                .filter(Boolean);
+
+            // 系统列表：单独取，用于标记与「仅系统」过滤
+            let systemSet = new Set<string>();
+            try {
+                const sysOut = await shell(adb, "pm list packages -s");
+                systemSet = new Set(
+                    sysOut
+                        .split("\n")
+                        .map((l) => l.trim())
+                        .filter((l) => l.startsWith("package:"))
+                        .map((l) => l.slice(8).trim()),
+                );
+            } catch {
+                /* ignore */
+            }
+
+            if (filter === "system") {
+                pkgs = [...systemSet];
+            }
+            pkgs = pkgs.sort();
 
             // 读取 PID
             const pidMap = new Map<string, number>();
@@ -576,15 +769,13 @@ class TestScriptStore {
                 this.apps = pkgs.map((p) => ({
                     package: p,
                     pid: pidMap.get(p) ?? 0,
-                    system: false,
+                    system: systemSet.has(p),
                 }));
-                this.includeSystemApps = includeSystem;
                 this.loadingApps = false;
             });
-            this.append(
-                `已列出 ${pkgs.length} 个应用${includeSystem ? "（含系统应用）" : "（仅第三方）"}`,
-                "ok",
-            );
+            const label =
+                filter === "all" ? "全部应用" : filter === "system" ? "系统应用" : "仅第三方";
+            this.append(`已列出 ${pkgs.length} 个应用（${label}）`, "ok");
         } catch (e) {
             runInAction(() => {
                 this.loadingApps = false;
@@ -614,6 +805,20 @@ class TestScriptStore {
         }
     }
 
+    /** 进入应用详情界面（系统设置里的该应用页面） */
+    async openAppInfo(pkg: string) {
+        if (!pkg) return;
+        try {
+            await this.exec(
+                `am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:${pkg}`,
+                `进入 ${pkg} 应用界面`,
+            );
+            this.append(`已打开 ${pkg} 的应用详情界面`, "ok");
+        } catch (e) {
+            this.append(`打开失败：${(e as Error).message}`, "err");
+        }
+    }
+
     /** 强制停止应用 */
     async forceStopApp(pkg: string) {
         if (!pkg) return;
@@ -622,6 +827,33 @@ class TestScriptStore {
             this.append(`已强制停止 ${pkg}`, "ok");
         } catch (e) {
             this.append(`强制停止失败：${(e as Error).message}`, "err");
+        }
+    }
+
+    /** 把当前应用包名列表导出为 txt */
+    async exportAppList(dirHandle?: FileSystemDirectoryHandle): Promise<boolean> {
+        if (this.apps.length === 0) {
+            this.append("应用列表为空，请先「列出应用」", "err");
+            return false;
+        }
+        const text = this.apps.map((a) => a.package).join("\n");
+        const blob = new Blob([text + "\n"], { type: "text/plain;charset=utf-8" });
+        const name = `packages_${timestampName().replace(/[-:]/g, "")}.txt`;
+        try {
+            if (dirHandle) {
+                const handle = await dirHandle.getFileHandle(name, { create: true });
+                const w = await handle.createWritable();
+                await w.write(blob);
+                await w.close();
+                this.append(`包名清单已保存到 ${dirHandle.name}/${name}`, "ok");
+            } else {
+                saveBlob(blob, name);
+                this.append(`包名清单已下载：${name}`, "ok");
+            }
+            return true;
+        } catch (e) {
+            this.append(`导出失败：${(e as Error).message}`, "err");
+            return false;
         }
     }
 }

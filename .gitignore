@@ -27,3 +27,6 @@ yarn-error.log*
 
 # Vite 临时文件
 vite.config.ts.timestamp-*.mjs
+
+# TS 增量编译缓存
+*.tsbuildinfo

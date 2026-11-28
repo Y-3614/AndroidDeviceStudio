@@ -257,14 +257,14 @@ export const ReadmePage = observer(function ReadmePage() {
                     <li>
                         <b>{zh ? "日志 Logcat" : "Logcat"}</b>
                         {zh
-                            ? "：实时日志。要点：① V/D/I/W/E/F 六个等级按钮，点亮即显示；② 可筛选应用（按 PID，应用重启后可刷新 PID）；③ 关键字 / 标签过滤，多项叠加生效；④ 可把日志实时写入电脑上的文件夹，每 20MB 分片，文件名用开始时间；⑤ 工具栏显示已落盘大小。命令侧不做设备端过滤，因此切换等级无需重新开始采集。"
-                            : ": live logs. Level buttons V/D/I/W/E/F; app filter by PID (refresh after restart); keyword/tag filters combined; stream logs to a PC folder in 20MB parts named by start time; toolbar shows bytes written. Filtering is client-side, so switching levels never restarts capture."}
+                            ? "：实时日志。要点：① V/D/I/W/E/F 六个等级按钮，点亮即显示；② 可筛选应用（按 PID，应用重启后可刷新 PID）；③ 关键字 / 标签过滤，多项叠加生效；④ 可把日志实时写入电脑上的文件夹，每 20MB 分片，文件名用开始时间；⑤ 工具栏显示已落盘大小；⑥ 「自动停止」可设 N 分钟后自动结束采集，运行中显示剩余秒数倒计时，到时自动停止并提示。为兼顾性能，界面只渲染最近 300 行、内存保留最近 4000 行，完整内容在落盘文件里。命令侧不做设备端过滤，因此切换等级无需重新开始采集。"
+                            : ": live logs. ① level buttons V/D/I/W/E/F; ② app filter by PID; ③ keyword/tag filters combined; ④ stream logs to a PC folder in 20MB parts named by start time; ⑤ toolbar shows bytes written; ⑥ Auto-stop ends capture after N minutes with a live countdown. Only the last 300 lines are rendered and 4000 kept in memory for performance; full content is in the written files. Filtering is client-side, so switching levels never restarts capture."}
                     </li>
                     <li>
                         <b>{zh ? "TEST 脚本" : "TEST Script"}</b>
                         {zh
-                            ? "：把项目里常用的批处理 / shell 流程固化成按钮 —— 日志采集与拉取到电脑、Monkey 稳定性测试、蓝牙 HCI 日志、CPU / 内存监控、应用管理。所有命令、路径、包名都可改成你自己项目的值并保存。"
-                            : ": turns common batch/shell flows into buttons — log capture & pull to PC, Monkey stability test, Bluetooth HCI logs, CPU/memory monitoring, app management. All commands, paths and package names are editable and persisted."}
+                            ? "：把项目里常用的批处理 / shell 流程固化成按钮 —— 日志拉取到电脑（自动建时间戳子目录）、日志清理、Monkey 稳定性测试（含自检）、蓝牙 HCI 日志、CPU / 内存监控（可导出 CSV）、应用管理（可导出包名 txt）。所有命令、路径、包名都可改成你自己项目的值并保存。"
+                            : ": turns common batch/shell flows into buttons — pull logs to PC (auto timestamp sub-folder), clean logs, Monkey stability test (with self-check), Bluetooth HCI logs, CPU/memory monitoring (CSV export), app management (txt export). All commands, paths and package names are editable and persisted."}
                     </li>
                     <li>
                         <b>{zh ? "安装 APK" : "Install APK"}</b>
@@ -318,37 +318,36 @@ export const ReadmePage = observer(function ReadmePage() {
                 </p>
 
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
-                    {zh ? "① 日志采集与拉取" : "① Log capture & pull"}
+                    {zh ? "① 日志拉取到电脑" : "① Pull logs to computer"}
                 </h3>
                 <ol style={listStyle}>
-                    <li>
-                        {zh ? "「后台 logcat 命令」默认 " : "Background logcat command defaults to "}
-                        <C>logcat -v time</C>
-                        {zh
-                            ? "，会在设备后台运行并把输出写到 /sdcard/yx_log/。"
-                            : ", runs in the background and writes output to /sdcard/yx_log/."}
-                    </li>
-                    <li>
-                        {zh
-                            ? "点「开始采集日志」启动；「清空设备日志缓冲」等价于 adb logcat -c。"
-                            : "Click Start log capture; Clear device log buffer equals adb logcat -c."}
-                    </li>
                     <li>
                         {zh
                             ? "「要拉取到电脑的路径」支持多行，每行一个设备目录（默认已按你的脚本预置 /data/yx_log、/data/anr、/data/tombstones 等）。"
                             : "Paths to pull accept multiple lines, one directory each (pre-filled from your scripts)."}
                     </li>
                     <li>
-                        <b>{zh ? "选择本地文件夹并导出" : "Choose local folder & export"}</b>
+                        <b>{zh ? "选择文件夹并导出" : "Choose folder & export"}</b>
                         {zh
-                            ? "：选一个电脑上的文件夹，日志会直接写进去（推荐，日志大时不占浏览器内存）。"
-                            : ": pick a PC folder and logs are written directly into it (recommended for large logs)."}
+                            ? "：选一个电脑上的文件夹后，程序会**自动在其中新建「年月日_时分秒」子文件夹**（对应原 01_pull_log.bat 的 %a%），所有日志归入该子文件夹，多轮拉取不会混在一起；导出完成后界面会显示本次目录名。"
+                            : ": after picking a PC folder, a “YYYY-MM-DD_HH-MM-SS” sub-folder is created automatically (matching 01_pull_log.bat) and all logs go inside it, so multiple pulls never mix."}
                     </li>
                     <li>
                         <b>{zh ? "拉取并下载（zip）" : "Pull & download (zip)"}</b>
                         {zh
                             ? "：不想选文件夹时，会把每个目录打包成 zip 直接下载。"
                             : ": without picking a folder, each directory is packed into a zip."}
+                    </li>
+                </ol>
+
+                <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
+                    {zh ? "② 日志清理（设备端）" : "② Clean logs (on device)"}
+                </h3>
+                <ol style={listStyle}>
+                    <li>
+                        {zh
+                            ? "「清空设备日志缓冲」等价于 adb logcat -c，只清 logcat 环形缓冲，不删文件。"
+                            : "Clear device log buffer equals adb logcat -c (buffer only, no files)."}
                     </li>
                     <li>
                         <b>{zh ? "清理设备日志目录" : "Clean device log folders"}</b>
@@ -359,28 +358,29 @@ export const ReadmePage = observer(function ReadmePage() {
                 </ol>
 
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
-                    {zh ? "② Monkey 稳定性测试" : "② Monkey stability test"}
+                    {zh ? "③ Monkey 稳定性测试" : "③ Monkey stability test"}
                 </h3>
                 <ol style={listStyle}>
                     <li>
                         {zh
-                            ? "「被测应用包名」每行一个，默认已按你的脚本填入 yaxon 系列包名。"
-                            : "Target packages, one per line; pre-filled with your yaxon list."}
+                            ? "「被测应用包名」每行一个，默认已按你的脚本填入 yaxon 系列包名；「Monkey 参数」「事件间隔(ms)」「事件总数」都可改，下方实时显示最终命令预览。"
+                            : "Target packages (one per line, pre-filled), arguments, throttle and event count are editable; a live preview is shown."}
+                    </li>
+                    <li>
+                        <b>{zh ? "自检（推荐先点）" : "Self-check (run first)"}</b>
+                        {zh
+                            ? "：会检查 monkey 是否存在、后台执行通道是否可用、/sdcard/yx_log 是否可写、目标包在设备上能找到几个 —— 点「后台运行 Monkey」没反应时先点它定位原因。"
+                            : ": checks whether monkey exists, background channel works, /sdcard/yx_log is writable, and how many target packages exist on the device."}
                     </li>
                     <li>
                         {zh
-                            ? "「Monkey 参数」「事件间隔(ms)」「事件总数」都可改，下方会实时显示最终命令预览。"
-                            : "Monkey arguments, throttle and event count are editable; a live preview is shown."}
-                    </li>
-                    <li>
-                        {zh
-                            ? "点「后台运行 Monkey」会在设备后台启动，输出写入 /sdcard/yx_log/。"
-                            : "Run Monkey in background starts it on the device; output goes to /sdcard/yx_log/."}
+                            ? "点「后台运行 Monkey」会在设备后台启动，输出写入 /sdcard/yx_log/monkey_时间戳.log；约 2.5 秒后会自动确认进程是否真的起来了。若未起来，可点「结束设备 monkey 进程」清理后重试。"
+                            : "Run Monkey in background starts it on the device; output goes to /sdcard/yx_log/monkey_<timestamp>.log, and the process is verified after ~2.5s. Kill monkey process cleans up if needed."}
                     </li>
                 </ol>
 
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
-                    {zh ? "③ 蓝牙 HCI 日志" : "③ Bluetooth HCI logs"}
+                    {zh ? "④ 蓝牙 HCI 日志" : "④ Bluetooth HCI logs"}
                 </h3>
                 <ol style={listStyle}>
                     <li>
@@ -399,7 +399,7 @@ export const ReadmePage = observer(function ReadmePage() {
                 </ol>
 
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
-                    {zh ? "④ CPU / 内存占用监控" : "④ CPU / memory monitoring"}
+                    {zh ? "⑤ CPU / 内存占用监控" : "⑤ CPU / memory monitoring"}
                 </h3>
                 <ol style={listStyle}>
                     <li>
@@ -409,39 +409,46 @@ export const ReadmePage = observer(function ReadmePage() {
                     </li>
                     <li>
                         {zh
-                            ? "上方以趋势条显示 CPU% 与内存% 变化，下方显示最近一次原始采样结果。"
-                            : "Trend bars show CPU%/memory% over time; latest raw samples below."}
+                            ? "上方以趋势条显示 CPU% 与内存% 变化，下方显示最近一次原始采样结果，右侧显示「上次采样」系统时点。"
+                            : "Trend bars show CPU%/memory% over time; latest raw samples and the last sample timestamp are shown."}
+                    </li>
+                    <li>
+                        <b>{zh ? "导出监控记录（CSV）" : "Export monitor log (CSV)"}</b>
+                        {zh
+                            ? "：可选择本地文件夹，把每次采样（时间、CPU%、内存%）保存为 CSV，便于后续用表格分析。"
+                            : ": pick a local folder to save every sample (time, CPU%, memory%) as CSV for later analysis."}
                     </li>
                 </ol>
 
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
-                    {zh ? "⑤ 应用管理" : "⑤ App management"}
+                    {zh ? "⑥ 应用管理" : "⑥ App management"}
                 </h3>
                 <ol style={listStyle}>
                     <li>
                         {zh
-                            ? "「包含系统应用」开关决定是列全部应用还是仅第三方；点「列出所有应用包名」加载。"
-                            : "Include system apps decides whether to list all or third-party only."}
+                            ? "「应用范围」默认「仅第三方」，可切「仅系统应用」或「全部应用」；点「列出应用包名」加载，搜索框可按包名过滤。"
+                            : "App scope defaults to third-party only; switch to system/all. Click List app packages, then filter by name."}
+                    </li>
+                    <li>
+                        <b>{zh ? "导出包名清单（txt）" : "Export package list (txt)"}</b>
+                        {zh
+                            ? "：选择本地文件夹，把当前列表存成 txt。"
+                            : ": pick a local folder to save the current list as txt."}
                     </li>
                     <li>
                         {zh
-                            ? "在搜索框按包名过滤后下拉选择；点「启动应用」拉起，点「强制停止」结束。"
-                            : "Filter by package name, pick it, then Launch app or Force stop."}
-                    </li>
-                    <li>
-                        {zh
-                            ? "勾选「启动前先强制停止」可在拉起前先 force-stop，确保冷启动。"
-                            : "Force stop before launch ensures a cold start."}
+                            ? "选中应用后可「启动应用」「进入应用界面」（打开系统设置里的应用详情页）或「强制停止」；勾选「启动前先强制停止」确保冷启动。"
+                            : "Launch app, Open app info (system settings detail page), or Force stop; Force stop before launch ensures a cold start."}
                     </li>
                 </ol>
 
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "6px 0 0" }}>
-                    {zh ? "⑥ 安装 APK 的安装路径" : "⑥ APK install path"}
+                    {zh ? "⑦ 安装 / 卸载 APK" : "⑦ Install / uninstall APK"}
                 </h3>
                 <p style={bodyStyle}>
                     {zh
-                        ? "安装 APK 页新增了「安装路径」下拉：默认 SD 卡（/sdcard），若推送失败或权限不足可改为 /data/local/tmp。"
-                        : "The Install APK page has an install-path dropdown: default SD card (/sdcard); switch to /data/local/tmp if pushing fails."}
+                        ? "安装 APK 页支持：临时目录下拉（SD 卡 / /data/local/tmp / 自定义路径）、安装参数开关（-r 覆盖、-d 降级、-g 授权、--no-streaming 先推后装）、多选 APK 批量安装；页面底部可「列出已安装应用」并直接卸载第三方应用。"
+                        : "Install APK supports: temp-dir dropdown (SD card / /data/local/tmp / custom), option toggles (-r/-d/-g/--no-streaming), multi-select batch install; the bottom section lists installed apps and uninstalls third-party ones."}
                 </p>
             </Section>
 
@@ -450,18 +457,23 @@ export const ReadmePage = observer(function ReadmePage() {
                 <ol style={listStyle}>
                     <li>
                         {zh
-                            ? "内置 100 条命令按分类整理（设备与连接、设备信息、应用管理、文件操作、日志与调试、性能监控、电源、网络、屏幕录制、系统权限等），右上角有锁标志的是内置命令，不可删除、不可修改。"
-                            : "100 built-in commands grouped by category; those with a lock icon are built-in and cannot be edited or deleted."}
+                            ? "内置 110+ 条命令按分类整理（设备与连接、设备信息、应用管理、文件操作、日志与调试、性能监控、内核与系统、输入界面、电源、网络、屏幕录制、系统权限等），分类标题可点击折叠 / 展开。右上角有锁标志的是内置命令，不可删除、不可修改。"
+                            : "110+ built-in commands grouped by category (collapsible headers); those with a lock icon are built-in and cannot be edited."}
                     </li>
                     <li>
                         {zh
-                            ? "搜索框按命令或说明过滤；分类下拉可只看某一类。"
-                            : "Use the search box or category dropdown to narrow down."}
+                            ? "每条命令都标注了「网页可执行」（带 adb shell，可直接在当前设备运行）或「电脑端」（需在本机命令行执行），还有「危险」标记。可用右上角下拉只显示「仅网页可执行」的命令。"
+                            : "Each command is tagged “web-runnable” (adb shell …) or “host”; danger commands are flagged. The dropdown can show web-runnable only."}
                     </li>
                     <li>
                         {zh
-                            ? "每条命令右侧三个操作：「复制」拿到命令文本；「执行」直接在当前连接的设备上运行并在下方显示输出；自定义命令额外有「修改」「删除」。"
-                            : "Each row has Copy and Run (output shown below); your own commands also get Edit and Delete."}
+                            ? "搜索框按命令或说明过滤；分类下拉可只看某一类；上方可切换「全部命令 / 仅网页可执行」。"
+                            : "Filter by search box or category; toggle between all commands and web-runnable only."}
+                    </li>
+                    <li>
+                        {zh
+                            ? "每条命令右侧：「复制」拿到命令文本；「执行」就地弹出结果框（不占据列表空间）——带 adb shell 的会真正在设备上运行，电脑端的命令会给出网页内的等价结果或跳转指引（例如 adb devices -l 会返回当前设备的完整信息，adb root 会引导到「权限与挂载」页）。自定义命令额外有「修改」「删除」。"
+                            : "Each row: Copy, and Run (shows results in a dialog). adb shell commands run on the device; host commands return an equivalent result or a jump hint (adb devices -l returns the current device info; adb root points to the Privilege page)."}
                     </li>
                     <li>
                         {zh

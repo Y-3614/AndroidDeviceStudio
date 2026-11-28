@@ -22,6 +22,19 @@ export interface AdbCommand {
     cloudId?: number;
     /** 是否为当前浏览器创建的（决定能否编辑/删除） */
     mine?: boolean;
+    /**
+     * 是否为**主机命令**（在电脑端 adb 执行，而非设备内 shell）。
+     * 例如 adb devices / adb connect / adb push —— 网页无法直接执行，
+     * 界面会明确标注，并在可替代时给出替代动作。
+     */
+    host?: boolean;
+    /**
+     * 网页可**原生实现**的主机命令类型（不必在电脑执行）。
+     * 由 commands-store 分派到对应实现，例如 "devices" / "get-state"。
+     */
+    native?: string;
+    /** 危险操作（执行前二次确认） */
+    danger?: boolean;
 }
 
 /** 分类顺序（导航与分组按此顺序展示） */
@@ -34,6 +47,7 @@ export const COMMAND_CATEGORIES = [
     "文件操作",
     "日志与调试",
     "性能与监控",
+    "内核与系统",
     "输入与界面",
     "电源与重启",
     "网络与端口",
@@ -48,20 +62,21 @@ const b = (
     category: CommandCategory,
     command: string,
     description: string,
-): AdbCommand => ({ id, category, command, description, builtin: true });
+    extra?: Pick<AdbCommand, "host" | "native" | "danger">,
+): AdbCommand => ({ id, category, command, description, builtin: true, ...extra });
 
 /** 内置 100 条命令 */
 export const BUILTIN_COMMANDS: AdbCommand[] = [
     /* ---------- 设备与连接（9） ---------- */
-    b("d01", "设备与连接", "adb devices -l", "列出已连接设备，含型号与传输方式（usb / product 信息）。"),
-    b("d02", "设备与连接", "adb connect 192.168.1.100:5555", "通过 WiFi 连接设备（需先用 adb tcpip 5555 开启无线端口）。IP 换成设备实际地址。"),
-    b("d03", "设备与连接", "adb disconnect", "断开所有无线（TCP）连接。"),
-    b("d04", "设备与连接", "adb kill-server", "结束本机 adb 服务。网页提示「设备被占用」时执行它即可释放。"),
-    b("d05", "设备与连接", "adb start-server", "启动本机 adb 服务。"),
-    b("d06", "设备与连接", "adb get-state", "查询设备状态：device（正常）/ offline（离线）/ unknown。"),
-    b("d07", "设备与连接", "adb get-serialno", "获取设备序列号。"),
-    b("d08", "设备与连接", "adb wait-for-device", "阻塞等待，直到设备上线（常用于脚本里确保设备就绪）。"),
-    b("d09", "设备与连接", "adb usb", "把设备切回 USB 连接模式（从无线切回来时用）。"),
+    b("d01", "设备与连接", "adb devices -l", "列出已连接设备，含型号与传输方式（usb / product 信息）。网页内点「执行」会用当前网页设备的完整信息直接给出结果。", { host: true, native: "devices" }),
+    b("d02", "设备与连接", "adb connect 192.168.1.100:5555", "通过 WiFi 连接设备（需先用 adb tcpip 5555 开启无线端口）。IP 换成设备实际地址。", { host: true }),
+    b("d03", "设备与连接", "adb disconnect", "断开所有无线（TCP）连接。", { host: true }),
+    b("d04", "设备与连接", "adb kill-server", "结束本机 adb 服务。网页提示「设备被占用」时执行它即可释放。", { host: true }),
+    b("d05", "设备与连接", "adb start-server", "启动本机 adb 服务。", { host: true }),
+    b("d06", "设备与连接", "adb get-state", "查询设备状态：device（正常）/ offline（离线）/ unknown。网页内点「执行」直接返回当前连接状态。", { host: true, native: "get-state" }),
+    b("d07", "设备与连接", "adb get-serialno", "获取设备序列号。网页内点「执行」返回当前设备的序列号。", { host: true, native: "get-serialno" }),
+    b("d08", "设备与连接", "adb wait-for-device", "阻塞等待，直到设备上线（常用于脚本里确保设备就绪）。", { host: true }),
+    b("d09", "设备与连接", "adb usb", "把设备切回 USB 连接模式（从无线切回来时用）。", { host: true }),
 
     /* ---------- 设备信息（8） ---------- */
     b("i01", "设备信息", "adb shell getprop ro.product.model", "读取设备型号。"),
@@ -87,12 +102,12 @@ export const BUILTIN_COMMANDS: AdbCommand[] = [
     b("a11", "应用管理", "adb shell pm enable com.yaxon.radio", "启用被禁用的应用。"),
     b("a12", "应用管理", "adb shell pm list packages -f", "列出包名同时显示 APK 路径。"),
 
-    /* ---------- 安装与卸载（5） ---------- */
-    b("p01", "安装与卸载", "adb install app.apk", "安装 APK。"),
-    b("p02", "安装与卸载", "adb install -r app.apk", "覆盖安装并保留原有数据。"),
-    b("p03", "安装与卸载", "adb install -r -d app.apk", "覆盖安装并允许版本降级。"),
-    b("p04", "安装与卸载", "adb install -g app.apk", "安装并自动授予全部运行时权限。"),
-    b("p05", "安装与卸载", "adb uninstall com.yaxon.radio", "卸载应用。"),
+    /* ---------- 安装与卸载（5，均为电脑端命令） ---------- */
+    b("p01", "安装与卸载", "adb install app.apk", "安装 APK。网页的「安装 APK」页可完成同样的事，并支持参数开关。", { host: true, native: "goto-install" }),
+    b("p02", "安装与卸载", "adb install -r app.apk", "覆盖安装并保留原有数据。", { host: true, native: "goto-install" }),
+    b("p03", "安装与卸载", "adb install -r -d app.apk", "覆盖安装并允许版本降级。", { host: true, native: "goto-install" }),
+    b("p04", "安装与卸载", "adb install -g app.apk", "安装并自动授予全部运行时权限。", { host: true, native: "goto-install" }),
+    b("p05", "安装与卸载", "adb uninstall com.yaxon.radio", "卸载应用。网页「安装 APK」页底部可选择应用直接卸载。", { host: true, native: "goto-install", danger: true }),
 
     /* ---------- 启动与停止（7） ---------- */
     b("s01", "启动与停止", "adb shell monkey -p com.yaxon.radio -c android.intent.category.LAUNCHER 1", "启动指定应用（通用做法，无需知道 Activity 名）。"),
@@ -104,12 +119,12 @@ export const BUILTIN_COMMANDS: AdbCommand[] = [
     b("s07", "启动与停止", "adb shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:com.yaxon.radio", "直接打开某应用的详情页。"),
 
     /* ---------- 文件操作（10） ---------- */
-    b("f01", "文件操作", "adb push D:/test.txt /sdcard/", "把电脑上的文件推送到设备。"),
-    b("f02", "文件操作", "adb pull /sdcard/test.txt D:/", "把设备上的文件拉到电脑。"),
+    b("f01", "文件操作", "adb push D:/test.txt /sdcard/", "把电脑上的文件推送到设备。", { host: true }),
+    b("f02", "文件操作", "adb pull /sdcard/test.txt D:/", "把设备上的文件拉到电脑。", { host: true }),
     b("f03", "文件操作", "adb shell ls -al /sdcard", "列出目录内容，含权限、大小、时间。"),
     b("f04", "文件操作", "adb shell ls -al /data/local/tmp", "列出指定目录（换路径即可）。"),
     b("f05", "文件操作", "adb shell mkdir -p /sdcard/test", "创建目录（-p 表示父目录不存在时一并创建）。"),
-    b("f06", "文件操作", "adb shell rm -rf /sdcard/test", "删除文件或目录（⚠️ 不可恢复，务必核对路径）。"),
+    b("f06", "文件操作", "adb shell rm -rf /sdcard/test", "删除文件或目录（⚠️ 不可恢复，务必核对路径）。", { danger: true }),
     b("f07", "文件操作", "adb shell cp /sdcard/a.txt /sdcard/b.txt", "复制文件。"),
     b("f08", "文件操作", "adb shell mv /sdcard/a.txt /sdcard/b.txt", "移动或重命名文件。"),
     b("f09", "文件操作", "adb shell cat /sdcard/test.txt", "查看文本文件内容。"),
@@ -125,7 +140,7 @@ export const BUILTIN_COMMANDS: AdbCommand[] = [
     b("l07", "日志与调试", "adb logcat -b main", "只查看 main 缓冲区（还可选 system / crash / events）。"),
     b("l08", "日志与调试", "adb logcat -s ActivityManager", "只显示指定标签的日志。"),
     b("l09", "日志与调试", "adb logcat *:E", "只显示 Error 及以上级别（V/D/I/W/E/F）。"),
-    b("l10", "日志与调试", "adb logcat -v time > log.txt", "抓取日志并保存到本地文件（在电脑命令行执行）。"),
+    b("l10", "日志与调试", "adb logcat -v time > log.txt", "抓取日志并保存到本地文件（在电脑命令行执行）。", { host: true }),
 
     /* ---------- 性能与监控（8） ---------- */
     b("m01", "性能与监控", "adb shell dumpsys cpuinfo", "查看各进程 CPU 占用及总计。"),
@@ -148,35 +163,49 @@ export const BUILTIN_COMMANDS: AdbCommand[] = [
     b("n08", "输入与界面", "adb shell input keyevent 224", "按键：224 = 唤醒屏幕。"),
 
     /* ---------- 电源与重启（6） ---------- */
-    b("w01", "电源与重启", "adb reboot", "重启设备。"),
-    b("w02", "电源与重启", "adb reboot recovery", "重启进入 Recovery 模式。"),
-    b("w03", "电源与重启", "adb reboot bootloader", "重启进入 Bootloader（fastboot）模式。"),
-    b("w04", "电源与重启", "adb shell reboot -p", "关机。"),
+    b("w01", "电源与重启", "adb reboot", "重启设备。", { host: true, native: "goto-power", danger: true }),
+    b("w02", "电源与重启", "adb reboot recovery", "重启进入 Recovery 模式。", { host: true, native: "goto-power", danger: true }),
+    b("w03", "电源与重启", "adb reboot bootloader", "重启进入 Bootloader（fastboot）模式。", { host: true, native: "goto-power", danger: true }),
+    b("w04", "电源与重启", "adb shell reboot -p", "关机。", { danger: true }),
     b("w05", "电源与重启", "adb shell svc power stayon true", "屏幕保持常亮（调试时防止息屏）。"),
     b("w06", "电源与重启", "adb shell settings put system screen_off_timeout 600000", "把自动息屏时间设为 10 分钟（600000ms）。"),
 
     /* ---------- 网络与端口（7） ---------- */
-    b("t01", "网络与端口", "adb tcpip 5555", "开启无线调试端口（设备重启后失效）。"),
+    b("t01", "网络与端口", "adb tcpip 5555", "开启无线调试端口（设备重启后失效）。", { host: true, native: "tcpip" }),
     b("t02", "网络与端口", "adb shell ip route", "查看网络路由与设备 IP。"),
     b("t03", "网络与端口", "adb shell ifconfig wlan0", "查看无线网卡信息（含 IP）。"),
-    b("t04", "网络与端口", "adb forward tcp:8080 tcp:8080", "端口转发：电脑 8080 → 设备 8080。"),
-    b("t05", "网络与端口", "adb reverse tcp:8080 tcp:8080", "反向转发：设备 8080 → 电脑 8080。"),
+    b("t04", "网络与端口", "adb forward tcp:8080 tcp:8080", "端口转发：电脑 8080 → 设备 8080。", { host: true }),
+    b("t05", "网络与端口", "adb reverse tcp:8080 tcp:8080", "反向转发：设备 8080 → 电脑 8080。", { host: true }),
     b("t06", "网络与端口", "adb shell svc wifi enable", "打开 WiFi。"),
     b("t07", "网络与端口", "adb shell svc wifi disable", "关闭 WiFi。"),
 
     /* ---------- 屏幕与录制（4） ---------- */
     b("r01", "屏幕与录制", "adb shell screencap -p /sdcard/screen.png", "截图并保存到设备。"),
-    b("r02", "屏幕与录制", "adb exec-out screencap -p > screen.png", "截图并直接保存到电脑（无需二次 pull）。"),
+    b("r02", "屏幕与录制", "adb exec-out screencap -p > screen.png", "截图并直接保存到电脑（无需二次 pull）。", { host: true, native: "goto-capture" }),
     b("r03", "屏幕与录制", "adb shell screenrecord /sdcard/video.mp4", "录屏（默认最长 180 秒，Ctrl+C 提前结束）。"),
     b("r04", "屏幕与录制", "adb shell screenrecord --time-limit 10 /sdcard/video.mp4", "限时 10 秒录屏。"),
 
     /* ---------- 系统与权限（6） ---------- */
-    b("y01", "系统与权限", "adb root", "以 root 权限重启 adbd。仅 userdebug / eng 固件可用。"),
-    b("y02", "系统与权限", "adb unroot", "把 adbd 恢复为普通权限。"),
-    b("y03", "系统与权限", "adb remount", "把 /system 等只读分区重新挂载为可写（需先 root）。"),
+    b("y01", "系统与权限", "adb root", "以 root 权限重启 adbd。仅 userdebug / eng 固件可用。", { host: true, native: "root" }),
+    b("y02", "系统与权限", "adb unroot", "把 adbd 恢复为普通权限。", { host: true, native: "unroot" }),
+    b("y03", "系统与权限", "adb remount", "把 /system 等只读分区重新挂载为可写（需先 root）。", { host: true, native: "remount" }),
     b("y04", "系统与权限", "adb shell su -c id", "检测设备是否已 root（返回 uid=0 即已 root）。"),
     b("y05", "系统与权限", "adb shell mount | grep system", "查看系统分区挂载状态（rw 表示可写）。"),
     b("y06", "系统与权限", "adb shell settings get global device_provisioned", "查看设备是否已完成初始化。"),
+
+    /* ---------- 内核与系统（12，均为设备内 shell 命令，只读 / 诊断为主） ---------- */
+    b("k01", "内核与系统", "cat /proc/version", "查看内核版本与编译信息。"),
+    b("k02", "内核与系统", "uname -a", "查看内核名称、版本、架构等综合信息。"),
+    b("k03", "内核与系统", "cat /proc/meminfo", "查看内核内存统计（MemTotal / MemFree / Buffers 等）。"),
+    b("k04", "内核与系统", "cat /proc/cpuinfo", "查看 CPU 核数与型号信息。"),
+    b("k05", "内核与系统", "cat /proc/loadavg", "查看 1/5/15 分钟平均负载（判断系统繁忙程度）。"),
+    b("k06", "内核与系统", "cat /proc/uptime", "查看系统已运行时间与空闲时间（秒）。"),
+    b("k07", "内核与系统", "dmesg", "查看内核环形缓冲区日志（驱动、硬件相关）。"),
+    b("k08", "内核与系统", "dmesg | tail -n 100", "查看内核日志最后 100 行（排查最近硬件事件）。"),
+    b("k09", "内核与系统", "cat /proc/interrupts", "查看中断统计（定位哪个设备频繁触发中断）。"),
+    b("k10", "内核与系统", "cat /proc/partitions", "查看块设备分区列表。"),
+    b("k11", "内核与系统", "ls -l /sys/class/thermal/thermal_zone*/temp", "查看各温区温度（毫摄氏度，除以 1000 得 ℃）。"),
+    b("k12", "内核与系统", "vmstat 1 3", "查看 3 次系统运行状态快照（进程 / 内存 / swap / CPU）。"),
 ];
 
 /** 快捷统计 */

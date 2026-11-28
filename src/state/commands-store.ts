@@ -35,6 +35,8 @@ export interface CommandResult {
     output: string;
     ok: boolean;
     time: string;
+    /** 是否由网页原生实现（而非在设备 shell 执行） */
+    native?: boolean;
 }
 
 /** 云端同步状态 */
@@ -418,18 +420,43 @@ class AdbCommandStore {
         }, 1500);
     }
 
-    /** 在设备上执行命令（自动去掉 adb / adb shell 前缀） */
+    /** 在设备上执行命令（自动去掉 adb / adb shell 前缀；主机命令走原生实现） */
     async run(cmd: AdbCommand) {
         const adb = connection.adb;
         if (!adb || this.running) return;
+
+        const time = new Date().toLocaleTimeString();
+        runInAction(() => {
+            this.running = true;
+        });
+
+        // 主机命令：网页无法直接执行 adb（那是电脑端程序），
+        // 能原生替代的走原生实现，否则给出明确说明与替代路径。
+        if (cmd.host) {
+            const native = await this.runNative(cmd).catch((e) => ({
+                output: `执行失败：${e instanceof Error ? e.message : String(e)}`,
+                ok: false,
+            }));
+            runInAction(() => {
+                this.results = [
+                    {
+                        command: cmd.command,
+                        output: native.output,
+                        ok: native.ok,
+                        time,
+                        native: true,
+                    },
+                    ...this.results.slice(0, 19),
+                ];
+                this.running = false;
+            });
+            return;
+        }
+
         let command = cmd.command.trim();
         if (command.startsWith("adb shell ")) command = command.slice(10);
         else if (command.startsWith("adb ")) command = command.slice(4);
 
-        runInAction(() => {
-            this.running = true;
-        });
-        const time = new Date().toLocaleTimeString();
         try {
             const out = await shell(adb, command);
             runInAction(() => {
@@ -449,6 +476,83 @@ class AdbCommandStore {
             runInAction(() => {
                 this.running = false;
             });
+        }
+    }
+
+    /**
+     * 原生实现主机命令。
+     *
+     * 网页连接的是浏览器自己的 WebUSB 设备，没有本机 adb server，
+     * 但部分「主机命令」等价信息可以从当前连接直接得到 —— 这里就地实现，
+     * 让「执行」按钮对这些命令也真正可用（例如 `adb devices -l`）。
+     */
+    private async runNative(
+        cmd: AdbCommand,
+    ): Promise<{ output: string; ok: boolean }> {
+        const adb = connection.adb;
+        const serial = connection.selectedSerial ?? "(未知)";
+        const name = connection.selectedDeviceName ?? "";
+        switch (cmd.native) {
+            case "devices": {
+                const banner = adb
+                    ? await adb
+                          .getProp("ro.product.model")
+                          .then((m) => m.trim())
+                          .catch(() => "")
+                    : "";
+                const lines = [
+                    "List of devices attached",
+                    `${serial}\tdevice${banner ? ` product:${banner}` : ""}${
+                        name ? ` model:${name}` : ""
+                    } transport_id:1`,
+                    "",
+                    "（本网页通过浏览器 WebUSB 直连设备，仅当前一台设备）",
+                ];
+                return { output: lines.join("\n"), ok: true };
+            }
+            case "get-state": {
+                return { output: adb ? "device" : "offline", ok: !!adb };
+            }
+            case "get-serialno": {
+                return { output: serial, ok: true };
+            }
+            case "tcpip": {
+                // 等价能力在「WiFi ADB」页完成（读 IP → 开 tcpip → 告知连接串）
+                return {
+                    output:
+                        "请在左侧「WiFi ADB」页操作：它会自动读取设备 IP、执行 adb tcpip 5555，并给出 adb connect 连接串。",
+                    ok: true,
+                };
+            }
+            case "goto-install":
+                return {
+                    output: "请在左侧「安装 APK」页完成安装 / 卸载（支持 -r/-d/-g 参数开关与自定义路径）。",
+                    ok: true,
+                };
+            case "goto-power":
+                return {
+                    output: "请在左侧「电源菜单」页执行重启 / 关机等操作。",
+                    ok: true,
+                };
+            case "goto-capture":
+                return {
+                    output: "请在左侧「屏幕截图」页一键截图并保存到电脑。",
+                    ok: true,
+                };
+            case "root":
+            case "unroot":
+            case "remount":
+                return {
+                    output: `请在左侧「权限与挂载」页执行 adb ${cmd.native}（该操作会导致 adbd 重启、连接断开，需在该页按引导操作）。`,
+                    ok: true,
+                };
+            default:
+                return {
+                    output:
+                        `「${cmd.command}」是电脑端 adb 命令，网页无法直接执行（浏览器没有本机 adb server）。\n` +
+                        `请在本机命令行运行，或使用上面标注「网页可执行」的等价功能。`,
+                    ok: false,
+                };
         }
     }
 

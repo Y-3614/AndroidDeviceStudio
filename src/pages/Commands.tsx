@@ -17,12 +17,12 @@ import {
     TextField,
 } from "@fluentui/react";
 import { observer } from "mobx-react-lite";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { adbCommands, type AdbCommand } from "../state/commands-store";
 import { connection } from "../state/connection";
 import { i18n } from "../state/i18n";
 
-/** 命令大全页：内置 100 条（不可删）+ 用户自定义（可增删改，云端共享） */
+/** 命令大全页：内置 100+ 条（不可删）+ 用户自定义（可增删改，云端共享） */
 export const CommandsPage = observer(function CommandsPage() {
     const t = i18n.t;
     const zh = i18n.lang === "zh";
@@ -34,6 +34,12 @@ export const CommandsPage = observer(function CommandsPage() {
     const [formDesc, setFormDesc] = useState("");
     const [saving, setSaving] = useState(false);
     const [notice, setNotice] = useState<string | undefined>();
+    /** 折叠的分类（默认全部展开） */
+    const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+    /** 就地弹出的执行结果对话框 */
+    const [dialogCmd, setDialogCmd] = useState<string | undefined>();
+    /** 是否显示「仅网页可执行」 */
+    const [onlyRunnable, setOnlyRunnable] = useState(false);
 
     // 进入页面时从云端拉取（失败自动降级本地）
     useEffect(() => {
@@ -103,10 +109,33 @@ export const CommandsPage = observer(function CommandsPage() {
         setNotice(zh ? "已删除。" : "Deleted.");
     };
 
+    /** 执行并就地弹出结果 */
+    const runAndShow = async (cmd: AdbCommand) => {
+        setDialogCmd(cmd.command);
+        await adbCommands.run(cmd);
+    };
+
+    const toggleGroup = (category: string) => {
+        setCollapsed((prev) => ({ ...prev, [category]: !prev[category] }));
+    };
+
     const categoryOptions: IDropdownOption[] = adbCommands.categories.map((c) => ({
         key: c,
         text: c,
     }));
+
+    const groups = useMemo(() => {
+        const all = adbCommands.grouped;
+        if (!onlyRunnable) return all;
+        return all
+            .map((g) => ({
+                category: g.category,
+                items: g.items.filter((c) => !c.host),
+            }))
+            .filter((g) => g.items.length > 0);
+    }, [adbCommands.grouped, onlyRunnable]);
+
+    const execResult = adbCommands.results[0];
 
     const cloudBadge = () => {
         switch (adbCommands.cloudState) {
@@ -127,10 +156,7 @@ export const CommandsPage = observer(function CommandsPage() {
             case "local":
             case "error":
                 return (
-                    <MessageBar
-                        messageBarType={MessageBarType.warning}
-                        isMultiline
-                    >
+                    <MessageBar messageBarType={MessageBarType.warning} isMultiline>
                         {zh
                             ? `云端暂不可用，新增命令仅保存在本机浏览器（不共享）。原因：${adbCommands.cloudError ?? "未知"}`
                             : `Cloud unavailable — new commands are saved locally only (not shared). Reason: ${adbCommands.cloudError ?? "unknown"}`}
@@ -160,8 +186,8 @@ export const CommandsPage = observer(function CommandsPage() {
             </h2>
             <p style={{ color: "#605e5c", margin: 0, lineHeight: 1.7 }}>
                 {zh
-                    ? `内置 ${adbCommands.builtinCount} 条真实可用命令（不可删除、不可修改），可在其基础上新增自己的命令。新增的命令会共享给所有打开本网站的人；自己创建的命令可以修改和删除。点击「复制」拿到命令，或点「执行」直接在当前连接的设备上运行。`
-                    : `${adbCommands.builtinCount} built-in commands (not editable), plus your own additions. Added commands are shared with everyone who opens this site; the ones you created can be edited and deleted.`}
+                    ? `内置 ${adbCommands.builtinCount} 条命令（不可删除、不可修改），并补充了内核与系统常用命令。标记「网页可执行」的带 adb shell 前缀，可直接在当前设备运行；标记「电脑端」的需在本机命令行执行，其中不少在网页里有等价功能（会给出跳转提示）。新增的命令会共享给所有打开本网站的人。`
+                    : `${adbCommands.builtinCount} built-in commands (not editable). Those marked “web-runnable” (adb shell …) run on the connected device; those marked “host” must run on your computer, and many have an equivalent page in this web app.`}
             </p>
 
             {cloudBadge()}
@@ -181,14 +207,23 @@ export const CommandsPage = observer(function CommandsPage() {
                     placeholder={zh ? "搜索命令或说明…" : "Search commands…"}
                     value={adbCommands.query}
                     onChange={(_, v) => adbCommands.setQuery(v ?? "")}
-                    styles={{ root: { width: 260 } }}
+                    styles={{ root: { width: 240 } }}
                 />
                 <Dropdown
                     placeholder={zh ? "全部分类" : "All categories"}
                     options={[{ key: "", text: zh ? "全部分类" : "All" }, ...categoryOptions]}
                     selectedKey={adbCommands.category}
                     onChange={(_, o) => adbCommands.setCategory(String(o?.key ?? ""))}
-                    styles={{ root: { width: 180 } }}
+                    styles={{ root: { width: 170 } }}
+                />
+                <Dropdown
+                    options={[
+                        { key: "all", text: zh ? "全部命令" : "All commands" },
+                        { key: "runnable", text: zh ? "仅网页可执行" : "Web-runnable only" },
+                    ]}
+                    selectedKey={onlyRunnable ? "runnable" : "all"}
+                    onChange={(_, o) => setOnlyRunnable(o?.key === "runnable")}
+                    styles={{ root: { width: 170 } }}
                 />
                 <PrimaryButton
                     text={zh ? "新增命令" : "Add command"}
@@ -222,193 +257,289 @@ export const CommandsPage = observer(function CommandsPage() {
                 </span>
             </Stack>
 
-            {/* 执行结果 */}
-            {adbCommands.results.length > 0 && (
-                <Stack
-                    styles={{
-                        root: {
-                            border: "1px solid #edebe9",
-                            borderRadius: 4,
-                            padding: 10,
-                            gap: 6,
-                            background: "#faf9f8",
-                        },
-                    }}
-                >
-                    <Stack horizontal horizontalAlign="space-between">
-                        <b>{zh ? "执行结果" : "Execution results"}</b>
-                        <DefaultButton
-                            text={zh ? "清空" : "Clear"}
-                            onClick={() => adbCommands.clearResults()}
-                        />
-                    </Stack>
-                    {adbCommands.results.map((r, i) => (
-                        <div key={i} style={{ fontFamily: "Consolas, Menlo, monospace", fontSize: 12 }}>
-                            <div style={{ color: "#0078d4" }}>
-                                $ {r.command}{" "}
-                                {!r.ok && (
-                                    <span style={{ color: "#a4262c" }}>
-                                        ({zh ? "失败" : "failed"})
-                                    </span>
-                                )}
-                            </div>
-                            <pre
-                                style={{
-                                    margin: 0,
-                                    whiteSpace: "pre-wrap",
-                                    wordBreak: "break-all",
-                                    color: r.ok ? "#323130" : "#a4262c",
-                                    maxHeight: 180,
-                                    overflow: "auto",
-                                }}
-                            >
-                                {r.output}
-                            </pre>
-                        </div>
-                    ))}
-                </Stack>
-            )}
-
             {!connection.isConnected && (
                 <MessageBar messageBarType={MessageBarType.info}>
                     {zh
-                        ? "尚未连接设备。「复制」始终可用；「执行」需要先连接设备。"
-                        : "No device connected. Copy always works; Run needs a connected device."}
+                        ? "尚未连接设备。「复制」始终可用；带 adb shell 的命令点「执行」需要先连接设备。"
+                        : "No device connected. Copy always works; adb shell commands need a connected device."}
                 </MessageBar>
             )}
 
-            {/* 命令分组 */}
+            {/* 命令分组（可折叠） */}
             {adbCommands.cloudState === "loading" && adbCommands.custom.length === 0 ? (
                 <Spinner size={SpinnerSize.medium} />
             ) : (
-                adbCommands.grouped.map((g) => (
-                    <Stack key={g.category} styles={{ root: { gap: 6 } }}>
-                        <h3
-                            style={{
-                                fontSize: 15,
-                                fontWeight: 600,
-                                margin: "10px 0 0",
-                                color: "#0078d4",
-                            }}
-                        >
-                            {g.category}
-                            <span style={{ color: "#a19f9d", fontWeight: 400, marginLeft: 6 }}>
-                                ({g.items.length})
-                            </span>
-                        </h3>
-                        {g.items.map((c) => (
+                groups.map((g) => {
+                    const isCollapsed = !!collapsed[g.category];
+                    return (
+                        <Stack key={g.category} styles={{ root: { gap: 6 } }}>
                             <div
-                                key={c.id}
+                                onClick={() => toggleGroup(g.category)}
                                 style={{
-                                    border: "1px solid #edebe9",
-                                    borderRadius: 4,
-                                    padding: "8px 10px",
                                     display: "flex",
-                                    gap: 10,
-                                    alignItems: "flex-start",
-                                    background: "#fff",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    cursor: "pointer",
+                                    padding: "6px 8px",
+                                    background: "#f3f2f1",
+                                    borderRadius: 4,
+                                    userSelect: "none",
                                 }}
                             >
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <pre
+                                <Icon
+                                    iconName={isCollapsed ? "ChevronRight" : "ChevronDown"}
+                                    styles={{ root: { fontSize: 12, color: "#605e5c" } }}
+                                />
+                                <span
+                                    style={{
+                                        fontSize: 15,
+                                        fontWeight: 600,
+                                        color: "#0078d4",
+                                    }}
+                                >
+                                    {g.category}
+                                </span>
+                                <span style={{ color: "#a19f9d", fontWeight: 400 }}>
+                                    ({g.items.length})
+                                </span>
+                            </div>
+                            {!isCollapsed &&
+                                g.items.map((c) => (
+                                    <div
+                                        key={c.id}
                                         style={{
-                                            margin: 0,
-                                            fontFamily: "Consolas, Menlo, monospace",
-                                            fontSize: 13,
-                                            color: "#323130",
-                                            whiteSpace: "pre-wrap",
-                                            wordBreak: "break-all",
+                                            border: "1px solid #edebe9",
+                                            borderRadius: 4,
+                                            padding: "8px 10px",
+                                            display: "flex",
+                                            gap: 10,
+                                            alignItems: "flex-start",
+                                            background: "#fff",
                                         }}
                                     >
-                                        {c.command}
-                                    </pre>
-                                    {c.description && (
-                                        <div
-                                            style={{
-                                                color: "#605e5c",
-                                                fontSize: 12.5,
-                                                marginTop: 4,
-                                                lineHeight: 1.6,
-                                            }}
-                                        >
-                                            {c.description}
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <pre
+                                                style={{
+                                                    margin: 0,
+                                                    fontFamily:
+                                                        "Consolas, Menlo, monospace",
+                                                    fontSize: 13,
+                                                    color: "#323130",
+                                                    whiteSpace: "pre-wrap",
+                                                    wordBreak: "break-all",
+                                                }}
+                                            >
+                                                {c.command}
+                                            </pre>
+                                            {c.description && (
+                                                <div
+                                                    style={{
+                                                        color: "#605e5c",
+                                                        fontSize: 12.5,
+                                                        marginTop: 4,
+                                                        lineHeight: 1.6,
+                                                    }}
+                                                >
+                                                    {c.description}
+                                                </div>
+                                            )}
+                                            <Stack
+                                                horizontal
+                                                tokens={{ childrenGap: 6 }}
+                                                style={{ marginTop: 4 }}
+                                                wrap
+                                            >
+                                                {c.host ? (
+                                                    <span
+                                                        style={{
+                                                            fontSize: 11,
+                                                            color: "#8a6d00",
+                                                            background: "#fff4ce",
+                                                            padding: "1px 6px",
+                                                            borderRadius: 3,
+                                                        }}
+                                                    >
+                                                        {zh ? "电脑端" : "host"}
+                                                    </span>
+                                                ) : (
+                                                    <span
+                                                        style={{
+                                                            fontSize: 11,
+                                                            color: "#107c10",
+                                                            background: "#dff6dd",
+                                                            padding: "1px 6px",
+                                                            borderRadius: 3,
+                                                        }}
+                                                    >
+                                                        {zh ? "网页可执行" : "web-runnable"}
+                                                    </span>
+                                                )}
+                                                {c.danger && (
+                                                    <span
+                                                        style={{
+                                                            fontSize: 11,
+                                                            color: "#a4262c",
+                                                            background: "#fde7e9",
+                                                            padding: "1px 6px",
+                                                            borderRadius: 3,
+                                                        }}
+                                                    >
+                                                        {zh ? "危险" : "danger"}
+                                                    </span>
+                                                )}
+                                            </Stack>
                                         </div>
-                                    )}
-                                </div>
-                                <Stack horizontal tokens={{ childrenGap: 2 }}>
-                                    {!c.builtin && c.mine === false && (
-                                        <span
-                                            title={
-                                                zh
-                                                    ? "由其他访客创建，不可修改"
-                                                    : "Created by another visitor"
-                                            }
-                                            style={{
-                                                color: "#a19f9d",
-                                                fontSize: 11,
-                                                alignSelf: "center",
-                                                whiteSpace: "nowrap",
-                                            }}
-                                        >
-                                            {zh ? "他人共享" : "shared"}
-                                        </span>
-                                    )}
-                                    <IconButton
-                                        iconProps={{
-                                            iconName:
-                                                adbCommands.copiedId === c.id
-                                                    ? "CheckMark"
-                                                    : "Copy",
-                                        }}
-                                        title={zh ? "复制命令" : "Copy"}
-                                        onClick={() => void adbCommands.copy(c)}
-                                    />
-                                    <IconButton
-                                        iconProps={{ iconName: "Play" }}
-                                        title={zh ? "在设备上执行" : "Run on device"}
-                                        disabled={!connection.isConnected || adbCommands.running}
-                                        onClick={() => void adbCommands.run(c)}
-                                    />
-                                    {!c.builtin && c.mine !== false && (
-                                        <>
+                                        <Stack horizontal tokens={{ childrenGap: 2 }}>
+                                            {!c.builtin && c.mine === false && (
+                                                <span
+                                                    title={
+                                                        zh
+                                                            ? "由其他访客创建，不可修改"
+                                                            : "Created by another visitor"
+                                                    }
+                                                    style={{
+                                                        color: "#a19f9d",
+                                                        fontSize: 11,
+                                                        alignSelf: "center",
+                                                        whiteSpace: "nowrap",
+                                                    }}
+                                                >
+                                                    {zh ? "他人共享" : "shared"}
+                                                </span>
+                                            )}
                                             <IconButton
-                                                iconProps={{ iconName: "Edit" }}
-                                                title={zh ? "修改" : "Edit"}
-                                                onClick={() => openEdit(c)}
+                                                iconProps={{
+                                                    iconName:
+                                                        adbCommands.copiedId === c.id
+                                                            ? "CheckMark"
+                                                            : "Copy",
+                                                }}
+                                                title={zh ? "复制命令" : "Copy"}
+                                                onClick={() => void adbCommands.copy(c)}
                                             />
                                             <IconButton
-                                                iconProps={{ iconName: "Delete" }}
-                                                title={zh ? "删除" : "Delete"}
-                                                onClick={() => void remove(c)}
+                                                iconProps={{ iconName: "Play" }}
+                                                title={
+                                                    c.host
+                                                        ? zh
+                                                            ? "执行（给出等价说明）"
+                                                            : "Run (with explanation)"
+                                                        : zh
+                                                          ? "在设备上执行"
+                                                          : "Run on device"
+                                                }
+                                                disabled={
+                                                    !connection.isConnected ||
+                                                    adbCommands.running
+                                                }
+                                                onClick={() => void runAndShow(c)}
                                             />
-                                        </>
-                                    )}
-                                    {c.builtin && (
-                                        <Icon
-                                            iconName="Lock"
-                                            title={zh ? "内置命令，不可删除/修改" : "Built-in"}
-                                            styles={{
-                                                root: {
-                                                    fontSize: 12,
-                                                    color: "#a19f9d",
-                                                    alignSelf: "center",
-                                                    padding: "0 4px",
-                                                },
-                                            }}
-                                        />
-                                    )}
-                                </Stack>
-                            </div>
-                        ))}
-                    </Stack>
-                ))
+                                            {!c.builtin && c.mine !== false && (
+                                                <>
+                                                    <IconButton
+                                                        iconProps={{ iconName: "Edit" }}
+                                                        title={zh ? "修改" : "Edit"}
+                                                        onClick={() => openEdit(c)}
+                                                    />
+                                                    <IconButton
+                                                        iconProps={{ iconName: "Delete" }}
+                                                        title={zh ? "删除" : "Delete"}
+                                                        onClick={() => void remove(c)}
+                                                    />
+                                                </>
+                                            )}
+                                            {c.builtin && (
+                                                <Icon
+                                                    iconName="Lock"
+                                                    title={
+                                                        zh
+                                                            ? "内置命令，不可删除/修改"
+                                                            : "Built-in"
+                                                    }
+                                                    styles={{
+                                                        root: {
+                                                            fontSize: 12,
+                                                            color: "#a19f9d",
+                                                            alignSelf: "center",
+                                                            padding: "0 4px",
+                                                        },
+                                                    }}
+                                                />
+                                            )}
+                                        </Stack>
+                                    </div>
+                                ))
+                            }
+                        </Stack>
+                    );
+                })
             )}
 
-            {adbCommands.visible.length === 0 && (
+            {groups.length === 0 && (
                 <div style={{ color: "#a19f9d", padding: 16 }}>
                     {zh ? "没有匹配的命令。" : "No matching commands."}
                 </div>
             )}
+
+            {/* 执行结果对话框（就地弹出，不占列表空间） */}
+            <Dialog
+                hidden={!dialogCmd}
+                onDismiss={() => {
+                    setDialogCmd(undefined);
+                    adbCommands.clearResults();
+                }}
+                dialogContentProps={{
+                    type: DialogType.close,
+                    title: zh ? "执行结果" : "Execution result",
+                    subText: dialogCmd,
+                }}
+                modalProps={{ isBlocking: false }}
+                minWidth={520}
+            >
+                {!execResult || execResult.command !== dialogCmd ? (
+                    <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
+                        <Spinner size={SpinnerSize.small} />
+                        <span>{zh ? "执行中…" : "Running…"}</span>
+                    </Stack>
+                ) : (
+                    <Stack tokens={{ childrenGap: 6 }}>
+                        {execResult.native && (
+                            <MessageBar messageBarType={MessageBarType.info}>
+                                {zh
+                                    ? "该命令为电脑端 adb 命令，此处给出网页内的等价结果或操作指引。"
+                                    : "This is a host adb command; the web app shows an equivalent result or guidance."}
+                            </MessageBar>
+                        )}
+                        <pre
+                            style={{
+                                margin: 0,
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-all",
+                                fontFamily: "Consolas, Menlo, monospace",
+                                fontSize: 12,
+                                color: execResult.ok ? "#323130" : "#a4262c",
+                                background: "#faf9f8",
+                                border: "1px solid #edebe9",
+                                borderRadius: 4,
+                                padding: 8,
+                                maxHeight: 320,
+                                overflow: "auto",
+                            }}
+                        >
+                            {execResult.output}
+                        </pre>
+                    </Stack>
+                )}
+                <DialogFooter>
+                    <DefaultButton
+                        text={zh ? "关闭" : "Close"}
+                        onClick={() => {
+                            setDialogCmd(undefined);
+                            adbCommands.clearResults();
+                        }}
+                    />
+                </DialogFooter>
+            </Dialog>
 
             {/* 新增 / 修改对话框 */}
             <Dialog

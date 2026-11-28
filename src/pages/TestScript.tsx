@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { connection } from "../state/connection";
 import { i18n } from "../state/i18n";
 import { saveBlob } from "../state/file-stream";
-import { testScript } from "../state/testscript";
+import { testScript, type AppFilter } from "../state/testscript";
 
 const mono: React.CSSProperties = {
     fontFamily: "Consolas, Menlo, monospace",
@@ -49,7 +49,8 @@ const preview: React.CSSProperties = {
     borderRadius: 4,
     margin: 0,
     overflowX: "auto",
-    whiteSpace: "pre",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
     flexShrink: 0,
     ...mono,
 };
@@ -112,7 +113,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
         );
     }
 
-    /** 让用户选一个本地文件夹（用于日志/HCI 导出） */
+    /** 让用户选一个本地文件夹（用于日志/HCI/监控/包名导出） */
     const pickFolder = async (): Promise<FileSystemDirectoryHandle | undefined> => {
         const picker = (
             window as unknown as {
@@ -120,7 +121,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
             }
         ).showDirectoryPicker;
         if (!picker) {
-            testScript.append("当前浏览器不支持选择文件夹，将改为直接下载 zip", "err");
+            testScript.append("当前浏览器不支持选择文件夹，将改为直接下载", "err");
             return undefined;
         }
         try {
@@ -130,9 +131,48 @@ export const TestScriptPage = observer(function TestScriptPage() {
         }
     };
 
+    const appFilterOptions: IDropdownOption[] = [
+        { key: "third", text: t.tsAppThird },
+        { key: "system", text: t.tsAppSystem },
+        { key: "all", text: t.tsAppAll },
+    ];
+
+    /** 应用范围三按钮（默认「仅第三方」） */
+    const appFilterButtons = (
+        <Stack horizontal tokens={{ childrenGap: 0 }} styles={{ root: { alignSelf: "flex-end" } }}>
+            {appFilterOptions.map((o, i) => {
+                const active = testScript.appFilter === o.key;
+                const isFirst = i === 0;
+                const isLast = i === appFilterOptions.length - 1;
+                return (
+                    <button
+                        key={String(o.key)}
+                        onClick={() => void testScript.loadApps(o.key as AppFilter)}
+                        style={{
+                            padding: "6px 14px",
+                            fontSize: 13,
+                            cursor: "pointer",
+                            border: "1px solid #8a8886",
+                            borderLeft: isFirst ? "1px solid #8a8886" : "none",
+                            borderTopLeftRadius: isFirst ? 2 : 0,
+                            borderBottomLeftRadius: isFirst ? 2 : 0,
+                            borderTopRightRadius: isLast ? 2 : 0,
+                            borderBottomRightRadius: isLast ? 2 : 0,
+                            background: active ? "#0078d4" : "#fff",
+                            color: active ? "#fff" : "#323130",
+                            fontWeight: active ? 600 : 400,
+                        }}
+                    >
+                        {o.text}
+                    </button>
+                );
+            })}
+        </Stack>
+    );
+
     const appOptions: IDropdownOption[] = testScript.apps
         .filter((a) => !appQuery || a.package.toLowerCase().includes(appQuery.toLowerCase()))
-        .slice(0, 300)
+        .slice(0, 400)
         .map((a) => ({
             key: a.package,
             text: a.pid ? `${a.package} (pid ${a.pid})` : a.package,
@@ -172,63 +212,22 @@ export const TestScriptPage = observer(function TestScriptPage() {
                 />
             </Stack>
 
-            {/* ── 一、日志采集与拉取 ── */}
+            {/* ── 一、日志拉取（每次新建时间戳文件夹） ── */}
             <div style={card}>
-                <h3 style={h3}>{t.tsSectionLog}</h3>
-                <TextField
-                    label={t.tsLogcatCommand}
-                    description={t.tsLogcatCommandHint}
-                    value={testScript.logcatCommand}
-                    onChange={(_, v) => (testScript.logcatCommand = v ?? "")}
-                    styles={{ root: { maxWidth: 520 } }}
-                />
-                <Stack horizontal tokens={{ childrenGap: 8 }} wrap>
-                    {testScript.logRunning ? (
-                        <DefaultButton
-                            text={t.tsStopLog}
-                            iconProps={{ iconName: "Stop" }}
-                            onClick={() => testScript.stopLogcat()}
-                        />
-                    ) : (
-                        <PrimaryButton
-                            text={t.tsStartLog}
-                            iconProps={{ iconName: "Play" }}
-                            onClick={() => void testScript.startLogcat()}
-                        />
-                    )}
-                    <DefaultButton
-                        text={t.tsClearDeviceLog}
-                        iconProps={{ iconName: "Delete" }}
-                        onClick={() => void testScript.clearDeviceLog()}
-                    />
-                    <DefaultButton
-                        text={t.tsRemoveLogs}
-                        iconProps={{ iconName: "Delete" }}
-                        onClick={() => void testScript.removeDeviceLogs()}
-                    />
-                </Stack>
-                <TextField
-                    label={t.tsCleanPaths}
-                    description={t.tsRemoveLogsHint}
-                    value={testScript.cleanPaths}
-                    onChange={(_, v) => (testScript.cleanPaths = v ?? "")}
-                    multiline
-                    rows={4}
-                    styles={{ root: { maxWidth: 620 }, field: monoField }}
-                />
+                <h3 style={h3}>{t.tsSectionPull}</h3>
                 <TextField
                     label={t.tsPullPaths}
                     value={testScript.pullPaths}
                     onChange={(_, v) => (testScript.pullPaths = v ?? "")}
                     multiline
                     autoAdjustHeight
-                    styles={{ root: { maxWidth: 620 }, field: monoField }}
+                    styles={{ root: { maxWidth: 640 }, field: monoField }}
                 />
                 <Stack horizontal tokens={{ childrenGap: 8 }} wrap verticalAlign="center">
                     <PrimaryButton
                         text={t.tsPullToFolder}
                         iconProps={{ iconName: "FolderOpen" }}
-                        disabled={testScript.pulling || testScript.logRunning}
+                        disabled={testScript.pulling}
                         onClick={async () => {
                             const dir = await pickFolder();
                             if (!dir) return;
@@ -252,9 +251,41 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         </span>
                     )}
                 </Stack>
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.tsPullFolderHint}</span>
+                {testScript.lastPullFolder && (
+                    <span style={{ fontSize: 12, color: "#107c10" }}>
+                        ✓ {t.tsLastFolder}：{testScript.lastPullFolder}
+                    </span>
+                )}
             </div>
 
-            {/* ── 二、Monkey ── */}
+            {/* ── 二、日志清理 ── */}
+            <div style={card}>
+                <h3 style={h3}>{t.tsSectionClean}</h3>
+                <Stack horizontal tokens={{ childrenGap: 8 }} wrap>
+                    <DefaultButton
+                        text={t.tsClearDeviceLog}
+                        iconProps={{ iconName: "Delete" }}
+                        onClick={() => void testScript.clearDeviceLog()}
+                    />
+                    <DefaultButton
+                        text={t.tsRemoveLogs}
+                        iconProps={{ iconName: "Delete" }}
+                        onClick={() => void testScript.removeDeviceLogs()}
+                    />
+                </Stack>
+                <TextField
+                    label={t.tsCleanPaths}
+                    description={t.tsRemoveLogsHint}
+                    value={testScript.cleanPaths}
+                    onChange={(_, v) => (testScript.cleanPaths = v ?? "")}
+                    multiline
+                    rows={4}
+                    styles={{ root: { maxWidth: 640 }, field: monoField }}
+                />
+            </div>
+
+            {/* ── 三、Monkey ── */}
             <div style={card}>
                 <h3 style={h3}>{t.tsSectionMonkey}</h3>
                 <TextField
@@ -263,7 +294,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                     onChange={(_, v) => (testScript.monkeyPackages = v ?? "")}
                     multiline
                     autoAdjustHeight
-                    styles={{ root: { maxWidth: 620 }, field: monoField }}
+                    styles={{ root: { maxWidth: 640 }, field: monoField }}
                 />
                 <TextField
                     label={t.tsMonkeyArgs}
@@ -271,7 +302,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                     onChange={(_, v) => (testScript.monkeyArgs = v ?? "")}
                     multiline
                     autoAdjustHeight
-                    styles={{ root: { maxWidth: 620 }, field: monoField }}
+                    styles={{ root: { maxWidth: 640 }, field: monoField }}
                 />
                 <Stack horizontal tokens={{ childrenGap: 12 }} wrap verticalAlign="end">
                     <SpinButton
@@ -313,7 +344,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                     </div>
                     <pre style={preview}>{testScript.buildMonkeyCommand()}</pre>
                 </div>
-                <Stack horizontal tokens={{ childrenGap: 8 }}>
+                <Stack horizontal tokens={{ childrenGap: 8 }} wrap>
                     {testScript.monkeyRunning ? (
                         <DefaultButton
                             text={t.tsStopMonkey}
@@ -327,10 +358,25 @@ export const TestScriptPage = observer(function TestScriptPage() {
                             onClick={() => void testScript.runMonkey()}
                         />
                     )}
+                    <DefaultButton
+                        text={t.tsMonkeySelfCheck}
+                        iconProps={{ iconName: "TestBeaker" }}
+                        onClick={() => void testScript.selfCheckMonkey()}
+                    />
+                    <DefaultButton
+                        text={t.tsKillMonkey}
+                        iconProps={{ iconName: "Delete" }}
+                        onClick={() => void testScript.killMonkey()}
+                    />
                 </Stack>
+                {testScript.monkeyCheck && (
+                    <pre style={{ ...preview, maxHeight: 160, overflowY: "auto" }}>
+                        {testScript.monkeyCheck}
+                    </pre>
+                )}
             </div>
 
-            {/* ── 三、蓝牙 HCI ── */}
+            {/* ── 四、蓝牙 HCI ── */}
             <div style={card}>
                 <h3 style={h3}>{t.tsSectionHci}</h3>
                 <MessageBar messageBarType={MessageBarType.info}>
@@ -368,7 +414,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                 </Stack>
             </div>
 
-            {/* ── 四、CPU / 内存监控 ── */}
+            {/* ── 五、CPU / 内存监控 ── */}
             <div style={card}>
                 <h3 style={h3}>{t.tsSectionMonitor}</h3>
                 <Stack horizontal tokens={{ childrenGap: 12 }} wrap verticalAlign="end">
@@ -401,6 +447,19 @@ export const TestScriptPage = observer(function TestScriptPage() {
                             onClick={() => void testScript.startMonitor()}
                         />
                     )}
+                    <DefaultButton
+                        text={t.tsExportMonitor}
+                        iconProps={{ iconName: "Download" }}
+                        onClick={async () => {
+                            const dir = await pickFolder();
+                            if (dir) await testScript.exportMonitor(dir).catch(() => false);
+                        }}
+                    />
+                    {testScript.lastSampleAt && (
+                        <span style={{ fontSize: 12, color: "#605e5c", alignSelf: "center" }}>
+                            {t.tsLastSample}：{testScript.lastSampleAt}
+                        </span>
+                    )}
                 </Stack>
                 <div>
                     <div style={{ fontSize: 12, color: "#605e5c", marginBottom: 4 }}>
@@ -419,17 +478,19 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         {`# CPU\n${testScript.cpuSample ?? ""}\n\n# MEM\n${testScript.memSample ?? ""}`}
                     </pre>
                 )}
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.tsMonitorHint}</span>
             </div>
 
-            {/* ── 五、应用管理 ── */}
+            {/* ── 六、应用管理 ── */}
             <div style={card}>
                 <h3 style={h3}>{t.tsSectionApps}</h3>
                 <Stack horizontal tokens={{ childrenGap: 12 }} wrap verticalAlign="end">
-                    <Toggle
-                        label={t.tsIncludeSystem}
-                        checked={testScript.includeSystemApps}
-                        onChange={(_, c) => void testScript.loadApps(!!c)}
-                    />
+                    <Stack tokens={{ childrenGap: 4 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>
+                            {t.tsAppFilter}
+                        </span>
+                        {appFilterButtons}
+                    </Stack>
                     <DefaultButton
                         text={t.tsListApps}
                         iconProps={{ iconName: "Refresh" }}
@@ -437,20 +498,28 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         disabled={testScript.loadingApps}
                     />
                     <TextField
-                        placeholder="搜索包名…"
+                        placeholder={t.tsSearchPkg}
                         value={appQuery}
                         onChange={(_, v) => setAppQuery(v ?? "")}
-                        styles={{ root: { width: 220 } }}
+                        styles={{ root: { width: 200 } }}
+                    />
+                    <DefaultButton
+                        text={t.tsExportAppList}
+                        iconProps={{ iconName: "Download" }}
+                        onClick={async () => {
+                            const dir = await pickFolder();
+                            if (dir) await testScript.exportAppList(dir).catch(() => false);
+                        }}
                     />
                 </Stack>
                 <Dropdown
-                    placeholder={`共 ${testScript.apps.length} 个应用`}
+                    placeholder={`${t.tsAppsLoaded}${testScript.apps.length}`}
                     selectedKey={testScript.selectedPackage || undefined}
                     options={appOptions}
                     onChange={(_, o) =>
                         (testScript.selectedPackage = String(o?.key ?? ""))
                     }
-                    styles={{ root: { maxWidth: 520 } }}
+                    styles={{ root: { maxWidth: 560 } }}
                 />
                 <Stack horizontal tokens={{ childrenGap: 12 }} wrap verticalAlign="center">
                     <Toggle
@@ -464,6 +533,14 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         disabled={!testScript.selectedPackage}
                         onClick={() =>
                             void testScript.launchApp(testScript.selectedPackage)
+                        }
+                    />
+                    <DefaultButton
+                        text={t.tsOpenAppInfo}
+                        iconProps={{ iconName: "Info" }}
+                        disabled={!testScript.selectedPackage}
+                        onClick={() =>
+                            void testScript.openAppInfo(testScript.selectedPackage)
                         }
                     />
                     <DefaultButton
@@ -482,6 +559,9 @@ export const TestScriptPage = observer(function TestScriptPage() {
             <div style={card}>
                 <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
                     <h3 style={{ ...h3, flex: 1 }}>{t.tsOutput}</h3>
+                    <span style={{ fontSize: 11, color: "#a19f9d" }}>
+                        {testScript.output.length} {t.tsLines}
+                    </span>
                     <DefaultButton
                         text={t.tsClearOutput}
                         onClick={() => testScript.clearOutput()}
@@ -490,7 +570,10 @@ export const TestScriptPage = observer(function TestScriptPage() {
                 <div
                     ref={outRef}
                     style={{
-                        height: 260,
+                        height: 280,
+                        minHeight: 100,
+                        maxHeight: 720,
+                        resize: "vertical",
                         overflow: "auto",
                         background: "#1e1e1e",
                         borderRadius: 4,
@@ -520,6 +603,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         ))
                     )}
                 </div>
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.tsOutputResizeHint}</span>
             </div>
         </Stack>
     );
