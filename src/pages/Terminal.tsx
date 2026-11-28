@@ -137,7 +137,11 @@ export const TerminalPage = observer(function TerminalPage() {
                     }
                     session = pty;
                     output = pty.output as unknown as ReadableStream<Uint8Array>;
-                    writer = pty.input as unknown as typeof writer;
+                    // ⚠️ pty.input 是 WritableStream，必须取 writer 才能 write()。
+                    // 之前直接把它当 writer 用 → write 不存在 → 键盘输入全部无效。
+                    writer = (
+                        pty.input as unknown as WritableStream<Uint8Array>
+                    ).getWriter() as unknown as typeof writer;
                     syncSize = (rows, cols) => {
                         void pty.resize(rows, cols).catch(() => {
                             /* 会话已结束 */
@@ -159,7 +163,10 @@ export const TerminalPage = observer(function TerminalPage() {
                     }
                     session = pty;
                     output = pty.output as unknown as ReadableStream<Uint8Array>;
-                    writer = pty.input as unknown as typeof writer;
+                    // 同样必须取 writer
+                    writer = (
+                        pty.input as unknown as WritableStream<Uint8Array>
+                    ).getWriter() as unknown as typeof writer;
                     syncSize = (rows, cols) => {
                         void writer
                             ?.write(

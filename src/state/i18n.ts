@@ -111,7 +111,10 @@ const dict = {
         mirrorTouch: "触摸操作",
         mirrorInterval: "刷新间隔(ms)",
         mirrorTouchHint:
-            "开启「触摸操作」后，可在画面上直接点击（点按）、拖拽（滑动）、长按 600ms 以上（长按）。右键 = 返回键。",
+            "开启「触摸操作」后，可在画面上直接点击（点按）、拖拽（滑动）、长按（停留 600ms 以上）。右键 = 返回键。",
+        mirrorLowLatency: "低延迟（scrcpy 流）",
+        mirrorFallback: "兼容模式（抓帧，延迟较高）",
+        mirrorCodec: "编码",
         recordStart: "开始录制",
         recordStop: "停止录制并下载",
         recording: "录制中",
@@ -326,6 +329,9 @@ const dict = {
         mirrorInterval: "Interval (ms)",
         mirrorTouchHint:
             "With touch input on, click (tap), drag (swipe) or press-and-hold 600ms+ (long press) directly on the screen. Right-click = Back.",
+        mirrorLowLatency: "Low latency (scrcpy stream)",
+        mirrorFallback: "Compatibility mode (framebuffer, higher latency)",
+        mirrorCodec: "Codec",
         recordStart: "Start recording",
         recordStop: "Stop & download",
         recording: "Recording",

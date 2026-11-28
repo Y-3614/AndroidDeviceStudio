@@ -24,3 +24,6 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+
+# Vite 临时文件
+vite.config.ts.timestamp-*.mjs

@@ -51,8 +51,19 @@ export const LOGCAT_BUFFERS = [
     { key: "crash", text: "crash" },
 ] as const;
 
-const MAX_DISPLAY = 5000; // 仅渲染上限，不影响采集与落盘
-const FLUSH_INTERVAL = 400; // ms
+/**
+ * 内存中保留的最大行数（**环形缓冲**）。
+ *
+ * 这是「打印日志导致电脑卡顿」的关键修复之一：
+ * 旧实现 lines 无上限增长，日志跑几分钟就有几十万行常驻内存，
+ * 加上每个 chunk 都触发一次全量 MobX 通知与重新渲染，必然卡死。
+ * 现在内存中只保留最近 N 行；**完整日志通过「选择文件夹落盘」获得**。
+ */
+const MAX_MEMORY_LINES = 8000;
+/** 仅渲染上限（DOM 节点数），进一步低于内存上限以保证滚动流畅 */
+const MAX_DISPLAY = 1500;
+/** 批量刷新间隔：把高频 chunk 合并成一次 UI 更新，避免每个分片都 re-render */
+const VIEW_FLUSH_INTERVAL = 300; // ms
 const FLUSH_BYTES = 512 * 1024;
 const FILE_LIMIT = 20 * 1024 * 1024; // 20MB 分片
 
@@ -200,7 +211,7 @@ class LogFileWriter {
         }
         this.timer = setInterval(() => {
             void this.flush();
-        }, FLUSH_INTERVAL);
+        }, 400);
     }
 
     private async openPart() {
@@ -274,8 +285,9 @@ class LogFileWriter {
 }
 
 class LogcatStore {
+    /** 内存中的日志（环形缓冲，最多 MAX_MEMORY_LINES 行） */
     lines: LogLine[] = [];
-    /** 采集到的总行数（不受渲染上限影响） */
+    /** 采集到的总行数（不受内存与渲染上限影响） */
     total = 0;
     running = false;
     error: string | undefined = undefined;
@@ -310,19 +322,44 @@ class LogcatStore {
     /** 自动停止分钟数（0 = 不限制） */
     autoStopMinutes = 0;
 
-    private abort: AbortController | undefined;
-    private idSeq = 0;
-    private bufferText = "";
-    private autoStopTimer: ReturnType<typeof setTimeout> | undefined;
+    // 以下为内部实现字段（在 makeAutoObservable 中显式声明为非响应式）
+    abort: AbortController | undefined;
+    idSeq = 0;
+    bufferText = "";
+
+    autoStopTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * UI 刷新节流：把高频到达的日志先放进 pending，按固定间隔批量提交，
+     * 避免每个网络分片都触发一次 MobX 通知 + React 重渲染（卡顿主因之一）。
+     */
+    pending: LogLine[] = [];
+    viewTimer: ReturnType<typeof setInterval> | undefined;
 
     constructor() {
         // writer 内含文件句柄，不能交给 MobX 代理。
-        // 其余私有字段用 makeAutoObservable 默认行为即可（不参与视图渲染）。
-        makeAutoObservable(this, { writer: false }, { autoBind: true });
+        makeAutoObservable(
+            this,
+            {
+                writer: false,
+                pending: false,
+                viewTimer: false,
+                abort: false,
+                idSeq: false,
+                bufferText: false,
+                autoStopTimer: false,
+            },
+            { autoBind: true },
+        );
+    }
+
+    /** 内存中被环形缓冲丢弃的行数 */
+    get droppedFromMemory(): number {
+        return Math.max(0, this.total - this.lines.length);
     }
 
     get displayLines(): LogLine[] {
-        // 只渲染尾部若干行（性能），但采集与落盘不受此限制
+        // 只渲染尾部若干行（性能），采集与落盘不受此限制
         const n = this.lines.length;
         return n > MAX_DISPLAY ? this.lines.slice(n - MAX_DISPLAY) : this.lines;
     }
@@ -478,8 +515,11 @@ class LogcatStore {
             this.total = 0;
             this.bufferText = "";
         });
+        this.pending = [];
 
         this.abort = new AbortController();
+        // 启动 UI 节流刷新（关键：避免每个分片都触发重渲染造成卡顿）
+        this.startViewTimer();
         await this.writer.start();
 
         // 自动停止计时
@@ -545,15 +585,54 @@ class LogcatStore {
         // 落盘：全量写入文件（不做等级过滤，保证完整性）
         this.writer.push(rawLines);
 
+        // 先进入 pending，由节流定时器批量提交（连同 total 一起在 action 中更新）
+        this.pending.push(...parsed);
+    }
+
+    /**
+     * 把 pending 中的日志批量并入可视列表。
+     *
+     * 这里做三件保命的事：
+     * 1. 一次 runInAction 提交整批，避免逐行触发响应式更新；
+     * 2. 环形缓冲：超出 MAX_MEMORY_LINES 时从头部截断，内存恒定；
+     * 3. 只在有内容时更新，避免空转。
+     */
+    private commitPending() {
+        if (this.pending.length === 0) return;
+        const batch = this.pending;
+        this.pending = [];
         runInAction(() => {
-            this.total += parsed.length;
-            this.lines.push(...parsed);
+            const next = this.lines.concat(batch);
+            if (next.length > MAX_MEMORY_LINES) {
+                this.lines = next.slice(next.length - MAX_MEMORY_LINES);
+            } else {
+                this.lines = next;
+            }
+            // total 表示「累计采集行数」，即使内存里已截断也照常累加
+            this.total += batch.length;
         });
+    }
+
+    /** 启动 UI 节流刷新定时器 */
+    private startViewTimer() {
+        this.stopViewTimer();
+        this.viewTimer = setInterval(() => this.commitPending(), VIEW_FLUSH_INTERVAL);
+    }
+
+    private stopViewTimer() {
+        if (this.viewTimer) {
+            clearInterval(this.viewTimer);
+            this.viewTimer = undefined;
+        }
+        // 收尾时把剩余日志刷出去
+        this.commitPending();
     }
 
     async stop() {
         this.abort?.abort();
         this.abort = undefined;
+        // 先停掉节流并刷出剩余日志，再关闭文件
+        this.stopViewTimer();
         if (this.autoStopTimer) {
             clearTimeout(this.autoStopTimer);
             this.autoStopTimer = undefined;
