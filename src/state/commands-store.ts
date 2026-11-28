@@ -63,6 +63,8 @@ class AdbCommandStore {
     running = false;
     /** 结果自增 id（非响应式） */
     seqId = 0;
+    /** 当前「执行命令弹窗」展示的结果 id（0 = 弹窗关闭） */
+    dialogId = 0;
 
     /** 云端同步状态 */
     cloudState: CloudState = "idle";
@@ -529,6 +531,42 @@ class AdbCommandStore {
                 r.id === id ? { ...r, ...patch } : r,
             );
         });
+    }
+
+    /** 打开「执行命令弹窗」（显示指定结果） */
+    openResultDialog(id: number) {
+        runInAction(() => {
+            this.dialogId = id;
+        });
+    }
+
+    /** 关闭弹窗 */
+    closeResultDialog() {
+        runInAction(() => {
+            this.dialogId = 0;
+        });
+    }
+
+    /** 当前弹窗对应的结果（未打开则为 undefined） */
+    get dialogResult(): CommandResult | undefined {
+        if (!this.dialogId) return undefined;
+        return this.results.find((r) => r.id === this.dialogId);
+    }
+
+    /**
+     * 执行命令并弹出「命令执行窗口」。
+     *
+     * 会先同步生成一条 pending 结果并立即弹出对话框（显示命令行 + 「执行中…」），
+     * 命令跑完后对话框内实时更新为最终输出；同时结果也记入顶部执行台。
+     */
+    async runAndOpen(cmd: AdbCommand) {
+        // 预估本次结果 id
+        const nextId = this.seqId + 1;
+        // 先打开弹窗（run() 内部会以相同 id 插入 pending 结果）
+        runInAction(() => {
+            this.dialogId = nextId;
+        });
+        await this.run(cmd);
     }
 
     /**

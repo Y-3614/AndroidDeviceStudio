@@ -405,12 +405,83 @@ export const TestScriptPage = observer(function TestScriptPage() {
                     </pre>
                 )}
 
+                {/* 后台模式：设备端日志路径 + 导出 */}
+                {testScript.monkeyMode === "bg" && testScript.monkeyLogFile && (
+                    <div
+                        style={{
+                            border: "1px solid #c7e0f4",
+                            background: "#f3f9fd",
+                            borderRadius: 4,
+                            padding: 8,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                        }}
+                    >
+                        <div style={{ fontSize: 12, color: "#005a9e" }}>
+                            <b>{zh ? "设备端日志路径：" : "Device log path: "}</b>
+                            <code style={mono}>{testScript.monkeyLogFile}</code>
+                        </div>
+                        <Stack
+                            horizontal
+                            tokens={{ childrenGap: 8 }}
+                            wrap
+                            verticalAlign="center"
+                        >
+                            <DefaultButton
+                                text={zh ? "从设备导出日志" : "Export device log"}
+                                iconProps={{ iconName: "Download" }}
+                                onClick={async () => {
+                                    const dir = await pickFolder();
+                                    await testScript
+                                        .exportMonkeyDeviceLog(dir)
+                                        .catch(() => false);
+                                }}
+                            />
+                            <DefaultButton
+                                text={zh ? "刷新文件大小" : "Refresh size"}
+                                iconProps={{ iconName: "Refresh" }}
+                                onClick={async () => {
+                                    const info =
+                                        await testScript.refreshMonkeyDeviceLogInfo();
+                                    if (info)
+                                        testScript.append(
+                                            `设备端日志（${testScript.monkeyLogFile}）：${info}`,
+                                            "info",
+                                        );
+                                }}
+                            />
+                        </Stack>
+                        <OpProgress bar={testScript.getProgress("monkeyDeviceLog")} />
+                    </div>
+                )}
+
                 {/* Monkey 实时日志 */}
-                <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
+                <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center" wrap>
                     <b style={{ flex: 1, fontSize: 13 }}>{t.tsMonkeyLiveLog}</b>
                     <span style={{ fontSize: 11, color: "#a19f9d" }}>
                         {testScript.monkeyLiveLog.length} {t.tsLines}
+                        {testScript.monkeySinkDir && (
+                            <span style={{ color: "#107c10", marginLeft: 6 }}>
+                                · {zh ? "直写落盘" : "sinking"} {testScript.monkeySinkLines}{" "}
+                                {t.tsLines}
+                            </span>
+                        )}
                     </span>
+                    <Toggle
+                        checked={!!testScript.monkeySinkDir}
+                        onText={zh ? "直写本地文件夹" : "Sink to folder"}
+                        offText={zh ? "直写本地文件夹" : "Sink to folder"}
+                        styles={{ root: { marginBottom: 0 } }}
+                        onChange={async (_, c) => {
+                            if (c) {
+                                const dir = await pickFolder();
+                                await testScript.pickMonkeySink(dir);
+                            } else {
+                                await testScript.pickMonkeySink(undefined);
+                            }
+                        }}
+                    />
                     <DefaultButton
                         text={t.tsMonkeySaveLog}
                         iconProps={{ iconName: "Save" }}
@@ -452,8 +523,8 @@ export const TestScriptPage = observer(function TestScriptPage() {
                     {testScript.monkeyLiveLog.length === 0 ? (
                         <span style={{ color: "#8c8c8c" }}>
                             {zh
-                                ? "（点「前台运行 Monkey」后，monkey 日志会实时打印在这里）"
-                                : "(Monkey log will stream here after you run it in foreground)"}
+                                ? "（点「前台运行 Monkey」后，monkey 日志会实时打印在这里；若开启「直写本地文件夹」，完整日志直接写入磁盘，页面只保留最近 1500 行以避免卡顿）"
+                                : "(Monkey log streams here. Enable “Sink to folder” to write the full log straight to disk; the page keeps only the latest 1500 lines for performance.)"}
                         </span>
                     ) : (
                         testScript.monkeyLiveLog.map((l, i) => (
@@ -463,9 +534,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         ))
                     )}
                 </div>
-                <span style={{ fontSize: 11, color: "#a19f9d" }}>
-                    {t.tsMonkeyStopHint}
-                </span>
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.tsMonkeyStopHint}</span>
             </div>
 
             {/* ── 四、蓝牙 HCI ── */}
@@ -513,13 +582,13 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         min={2}
                         step={1}
                         onIncrement={(v) => {
-                            testScript.monitorIntervalSec = Number(v) + 1;
+                            testScript.setMonitorInterval(Number(v) + 1);
                         }}
                         onDecrement={(v) => {
-                            testScript.monitorIntervalSec = Math.max(2, Number(v) - 1);
+                            testScript.setMonitorInterval(Math.max(2, Number(v) - 1));
                         }}
                         onChange={(_, v) => {
-                            testScript.monitorIntervalSec = Number(v) || 10;
+                            testScript.setMonitorInterval(Number(v) || 10);
                         }}
                         styles={{ root: { width: 160 } }}
                     />
@@ -558,7 +627,21 @@ export const TestScriptPage = observer(function TestScriptPage() {
                     </span>
                     <span style={{ fontSize: 12, color: "#605e5c" }}>
                         {t.tsMonitorDuration}：
-                        <b>{minToText(testScript.monitorDurationSec)}</b>
+                        <b>
+                            {minToText(
+                                testScript.monitoring
+                                    ? testScript.monitorTick
+                                    : testScript.monitorDurationSec,
+                            )}
+                        </b>
+                        {testScript.monitoring && (
+                            <span style={{ color: "#107c10", marginLeft: 4 }}>
+                                {zh ? "（计时中…）" : "(timing…)"}
+                            </span>
+                        )}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#605e5c" }}>
+                        {zh ? "采样间隔" : "Interval"}：<b>{testScript.monitorIntervalSec}s</b>
                     </span>
                     {testScript.lastSampleAt && (
                         <span style={{ fontSize: 12, color: "#605e5c" }}>
@@ -566,6 +649,45 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         </span>
                     )}
                 </Stack>
+
+                {/* 统计：最小 / 平均 / 峰值 */}
+                {testScript.monitorStats && (
+                    <div
+                        style={{
+                            display: "flex",
+                            gap: 16,
+                            flexWrap: "wrap",
+                            fontSize: 12,
+                            background: "#fff",
+                            border: "1px solid #edebe9",
+                            borderRadius: 4,
+                            padding: "8px 10px",
+                        }}
+                    >
+                        <span>
+                            <b style={{ color: "#d13438" }}>CPU</b>
+                            {"  "}
+                            {zh ? "最小" : "min"} {testScript.monitorStats.cpu.min}% ·{" "}
+                            {zh ? "平均" : "avg"}{" "}
+                            <b>{testScript.monitorStats.cpu.avg}%</b> ·{" "}
+                            {zh ? "峰值" : "peak"}{" "}
+                            <b style={{ color: "#d13438" }}>
+                                {testScript.monitorStats.cpu.max}%
+                            </b>
+                        </span>
+                        <span>
+                            <b style={{ color: "#0078d4" }}>内存</b>
+                            {"  "}
+                            {zh ? "最小" : "min"} {testScript.monitorStats.mem.min}% ·{" "}
+                            {zh ? "平均" : "avg"}{" "}
+                            <b>{testScript.monitorStats.mem.avg}%</b> ·{" "}
+                            {zh ? "峰值" : "peak"}{" "}
+                            <b style={{ color: "#0078d4" }}>
+                                {testScript.monitorStats.mem.max}%
+                            </b>
+                        </span>
+                    </div>
+                )}
                 <OpProgress bar={testScript.getProgress("monitorExport")} />
 
                 <div>
@@ -582,6 +704,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         ]}
                         maxY={100}
                         height={140}
+                        markPeak
                     />
                 </div>
                 <div>
@@ -598,8 +721,138 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         ]}
                         maxY={100}
                         height={140}
+                        markPeak
                     />
                 </div>
+
+                {/* Top 进程明细：谁拉高了整体占用 */}
+                {(testScript.lastTopCpu.length > 0 || testScript.lastTopMem.length > 0) && (
+                    <Stack horizontal tokens={{ childrenGap: 12 }} wrap>
+                        <div style={{ flex: 1, minWidth: 280 }}>
+                            <div
+                                style={{
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    color: "#d13438",
+                                    marginBottom: 4,
+                                }}
+                            >
+                                {zh
+                                    ? `CPU 占用 Top（谁拉高了 CPU，最近 ${testScript.lastSampleAt}）`
+                                    : `Top CPU processes (${testScript.lastSampleAt})`}
+                            </div>
+                            <div
+                                style={{
+                                    maxHeight: 200,
+                                    overflowY: "auto",
+                                    border: "1px solid #edebe9",
+                                    borderRadius: 4,
+                                    background: "#fff",
+                                    ...mono,
+                                }}
+                            >
+                                {testScript.lastTopCpu.map((p, i) => {
+                                    const total = testScript.cpuHistory.at(-1) ?? 0;
+                                    const share = total > 0 ? (p.value / total) * 100 : 0;
+                                    return (
+                                        <div
+                                            key={i}
+                                            style={{
+                                                padding: "3px 8px",
+                                                borderBottom: "1px solid #f3f2f1",
+                                                display: "flex",
+                                                gap: 8,
+                                            }}
+                                        >
+                                            <span
+                                                style={{
+                                                    width: 52,
+                                                    color: "#d13438",
+                                                    textAlign: "right",
+                                                }}
+                                            >
+                                                {p.value}%
+                                            </span>
+                                            <span style={{ flex: 1 }}>
+                                                {p.name}
+                                                {p.pid ? (
+                                                    <span style={{ color: "#a19f9d" }}>
+                                                        {" "}
+                                                        (pid {p.pid})
+                                                    </span>
+                                                ) : null}
+                                            </span>
+                                            <span style={{ color: "#605e5c" }}>
+                                                {zh ? "占整体" : "of total"}{" "}
+                                                {share.toFixed(0)}%
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 280 }}>
+                            <div
+                                style={{
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    color: "#0078d4",
+                                    marginBottom: 4,
+                                }}
+                            >
+                                {zh
+                                    ? `内存占用 Top（谁拉高了内存，最近 ${testScript.lastSampleAt}）`
+                                    : `Top memory processes (${testScript.lastSampleAt})`}
+                            </div>
+                            <div
+                                style={{
+                                    maxHeight: 200,
+                                    overflowY: "auto",
+                                    border: "1px solid #edebe9",
+                                    borderRadius: 4,
+                                    background: "#fff",
+                                    ...mono,
+                                }}
+                            >
+                                {testScript.lastTopMem.map((p, i) => (
+                                    <div
+                                        key={i}
+                                        style={{
+                                            padding: "3px 8px",
+                                            borderBottom: "1px solid #f3f2f1",
+                                            display: "flex",
+                                            gap: 8,
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                width: 62,
+                                                color: "#0078d4",
+                                                textAlign: "right",
+                                            }}
+                                        >
+                                            {p.value}MB
+                                        </span>
+                                        <span style={{ flex: 1 }}>
+                                            {p.name}
+                                            {p.pid ? (
+                                                <span style={{ color: "#a19f9d" }}>
+                                                    {" "}
+                                                    (pid {p.pid})
+                                                </span>
+                                            ) : null}
+                                        </span>
+                                        {p.percent !== undefined && (
+                                            <span style={{ color: "#605e5c" }}>
+                                                {p.percent}%
+                                            </span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </Stack>
+                )}
 
                 {/* 内存泄露检测结果 */}
                 {testScript.leakResult && (
@@ -611,20 +864,34 @@ export const TestScriptPage = observer(function TestScriptPage() {
                             background: "#fff",
                         }}
                     >
-                        <div
-                            style={{
-                                fontWeight: 600,
-                                color: leakLevelColor,
-                                marginBottom: 6,
-                            }}
-                        >
-                            {t.tsLeakTitle}：
-                            {testScript.leakResult.level === "likely"
-                                ? t.tsLeakLikely
-                                : testScript.leakResult.level === "slight"
-                                  ? t.tsLeakSlight
-                                  : t.tsLeakNone}
-                        </div>
+                        <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
+                            <div
+                                style={{
+                                    flex: 1,
+                                    fontWeight: 600,
+                                    color: leakLevelColor,
+                                }}
+                            >
+                                {t.tsLeakTitle}：
+                                {testScript.leakResult.level === "likely"
+                                    ? t.tsLeakLikely
+                                    : testScript.leakResult.level === "slight"
+                                      ? t.tsLeakSlight
+                                      : t.tsLeakNone}
+                            </div>
+                            {testScript.leakBugs.length > 0 && (
+                                <DefaultButton
+                                    text={zh ? "导出问题单" : "Export bug report"}
+                                    iconProps={{ iconName: "Download" }}
+                                    onClick={async () => {
+                                        const dir = await pickFolder();
+                                        await testScript
+                                            .exportLeakBugs(dir)
+                                            .catch(() => false);
+                                    }}
+                                />
+                            )}
+                        </Stack>
                         <pre
                             style={{
                                 ...preview,
@@ -636,6 +903,74 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         >
                             {testScript.leakResult.detail}
                         </pre>
+                        <OpProgress bar={testScript.getProgress("leakExport")} />
+
+                        {/* 详细问题单（提 bug 单格式） */}
+                        {testScript.leakBugs.map((b, i) => (
+                            <div
+                                key={i}
+                                style={{
+                                    marginTop: 10,
+                                    border: "1px solid #edebe9",
+                                    borderRadius: 4,
+                                    background: "#faf9f8",
+                                    padding: 10,
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        fontWeight: 600,
+                                        color: leakLevelColor,
+                                        marginBottom: 4,
+                                    }}
+                                >
+                                    {zh ? "缺陷" : "Bug"} {i + 1}：{b.title}
+                                </div>
+                                <div style={{ fontSize: 12, color: "#605e5c" }}>
+                                    {zh ? "严重程度" : "Severity"}：<b>{b.severity}</b>
+                                </div>
+                                {[
+                                    [zh ? "问题现象" : "Phenomenon", b.phenomenon],
+                                    [
+                                        zh ? "复现步骤" : "Steps",
+                                        b.steps.map((s, k) => `${k + 1}. ${s}`).join("\n"),
+                                    ],
+                                    [
+                                        zh ? "数据证据" : "Evidence",
+                                        b.evidence.map((e) => `· ${e}`).join("\n"),
+                                    ],
+                                    [zh ? "判定依据" : "Basis", b.basis],
+                                    [zh ? "影响范围" : "Impact", b.impact],
+                                    [zh ? "建议排查方向" : "Suggestion", b.suggestion],
+                                ].map(([label, val], k) => (
+                                    <div key={k} style={{ marginTop: 6 }}>
+                                        <div
+                                            style={{
+                                                fontSize: 12,
+                                                fontWeight: 600,
+                                                color: "#323130",
+                                            }}
+                                        >
+                                            【{label}】
+                                        </div>
+                                        <pre
+                                            style={{
+                                                margin: "2px 0 0",
+                                                whiteSpace: "pre-wrap",
+                                                wordBreak: "break-all",
+                                                fontSize: 12,
+                                                color: "#323130",
+                                                fontFamily:
+                                                    "Segoe UI, system-ui, sans-serif",
+                                                lineHeight: 1.7,
+                                            }}
+                                        >
+                                            {val}
+                                        </pre>
+                                    </div>
+                                ))}
+                            </div>
+                        ))}
                     </div>
                 )}
 

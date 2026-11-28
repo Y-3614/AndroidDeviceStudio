@@ -590,11 +590,13 @@ export const CommandsPage = observer(function CommandsPage() {
                                                 iconProps={{ iconName: "Play" }}
                                                 title={
                                                     zh
-                                                        ? "执行（结果显示在顶部命令台）"
-                                                        : "Run (result shows in console)"
+                                                        ? "执行（弹出命令执行窗口，结果同时记入顶部执行台）"
+                                                        : "Run (opens a dialog; result also logged to the console)"
                                                 }
                                                 disabled={!connection.isConnected}
-                                                onClick={() => void adbCommands.run(c)}
+                                                onClick={() => {
+                                                    void adbCommands.runAndOpen(c);
+                                                }}
                                             />
                                             {!c.builtin && c.mine !== false && (
                                                 <>
@@ -699,6 +701,130 @@ export const CommandsPage = observer(function CommandsPage() {
                     <DefaultButton
                         text={zh ? "取消" : "Cancel"}
                         onClick={() => setShowForm(false)}
+                    />
+                </DialogFooter>
+            </Dialog>
+
+            {/* 执行命令弹窗：显示命令行 + 实时输出（顶部执行台继续保留汇总） */}
+            <Dialog
+                hidden={!adbCommands.dialogResult}
+                onDismiss={() => adbCommands.closeResultDialog()}
+                dialogContentProps={{
+                    type: DialogType.normal,
+                    title: zh ? "执行命令" : "Run command",
+                }}
+                modalProps={{ isBlocking: false, styles: { main: { maxWidth: 860 } } }}
+            >
+                {adbCommands.dialogResult && (
+                    <Stack tokens={{ childrenGap: 10 }}>
+                        <div>
+                            <div
+                                style={{
+                                    fontSize: 12,
+                                    color: "#605e5c",
+                                    marginBottom: 4,
+                                }}
+                            >
+                                {zh ? "命令" : "Command"}
+                            </div>
+                            <pre
+                                style={{
+                                    margin: 0,
+                                    padding: 10,
+                                    background: "#f3f2f1",
+                                    borderRadius: 4,
+                                    whiteSpace: "pre-wrap",
+                                    wordBreak: "break-all",
+                                    fontFamily: "Consolas, Menlo, monospace",
+                                    fontSize: 13,
+                                    color: "#323130",
+                                }}
+                            >
+                                {adbCommands.dialogResult.command}
+                            </pre>
+                            {adbCommands.dialogResult.deviceCommand !==
+                                adbCommands.dialogResult.command && (
+                                <div
+                                    style={{
+                                        fontSize: 11,
+                                        color: "#a19f9d",
+                                        marginTop: 4,
+                                    }}
+                                >
+                                    {zh
+                                        ? `实际发送给设备：${adbCommands.dialogResult.deviceCommand}`
+                                        : `Sent to device: ${adbCommands.dialogResult.deviceCommand}`}
+                                </div>
+                            )}
+                        </div>
+                        <div>
+                            <Stack
+                                horizontal
+                                tokens={{ childrenGap: 8 }}
+                                verticalAlign="center"
+                            >
+                                <span
+                                    style={{
+                                        fontSize: 12,
+                                        color: "#605e5c",
+                                        flex: 1,
+                                    }}
+                                >
+                                    {zh ? "输出" : "Output"}
+                                </span>
+                                {adbCommands.dialogResult.pending ? (
+                                    <span style={{ fontSize: 12, color: "#0078d4" }}>
+                                        <Spinner size={SpinnerSize.xSmall} />{" "}
+                                        {zh ? "执行中…" : "running…"}
+                                    </span>
+                                ) : (
+                                    <span
+                                        style={{
+                                            fontSize: 12,
+                                            color: adbCommands.dialogResult.ok
+                                                ? "#107c10"
+                                                : "#a4262c",
+                                        }}
+                                    >
+                                        {adbCommands.dialogResult.ok
+                                            ? zh
+                                                ? "✓ 执行完成"
+                                                : "✓ done"
+                                            : zh
+                                              ? "✗ 执行失败"
+                                              : "✗ failed"}
+                                    </span>
+                                )}
+                            </Stack>
+                            <pre
+                                style={{
+                                    margin: "4px 0 0",
+                                    padding: 10,
+                                    background: "#1e1e1e",
+                                    color: "#d4d4d4",
+                                    borderRadius: 4,
+                                    minHeight: 160,
+                                    maxHeight: 420,
+                                    overflowY: "auto",
+                                    whiteSpace: "pre-wrap",
+                                    wordBreak: "break-all",
+                                    fontFamily: "Consolas, Menlo, monospace",
+                                    fontSize: 12,
+                                }}
+                            >
+                                {adbCommands.dialogResult.pending
+                                    ? zh
+                                        ? "正在执行，请稍候…"
+                                        : "Running, please wait…"
+                                    : adbCommands.dialogResult.output}
+                            </pre>
+                        </div>
+                    </Stack>
+                )}
+                <DialogFooter>
+                    <PrimaryButton
+                        text={zh ? "关闭" : "Close"}
+                        onClick={() => adbCommands.closeResultDialog()}
                     />
                 </DialogFooter>
             </Dialog>

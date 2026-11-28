@@ -23,6 +23,8 @@ export function LineChart({
     unit = "%",
     maxY,
     minY = 0,
+    /** 是否在最高点标注具体数值 */
+    markPeak = true,
 }: {
     series: LineSeries[];
     height?: number;
@@ -30,6 +32,7 @@ export function LineChart({
     /** Y 轴上限；不传则按数据自适应 */
     maxY?: number;
     minY?: number;
+    markPeak?: boolean;
 }) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -48,7 +51,7 @@ export function LineChart({
 
         const padL = 44;
         const padR = 12;
-        const padT = 10;
+        const padT = 16;
         const padB = 20;
         const plotW = cssW - padL - padR;
         const plotH = cssH - padT - padB;
@@ -98,6 +101,30 @@ export function LineChart({
             // 末端点 + 数值
             const lastX = xAt(s.data.length - 1);
             const lastY = yAt(s.data[s.data.length - 1]!);
+
+            // 最高点标注
+            if (markPeak && s.data.length > 1) {
+                const peak = Math.max(...s.data);
+                const peakI = s.data.indexOf(peak);
+                const px = xAt(peakI);
+                const py = yAt(peak);
+                // 高亮点
+                ctx.fillStyle = s.color;
+                ctx.beginPath();
+                ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+                ctx.fill();
+                // 数值标签
+                const label = `${peak.toFixed(1)}${unit}`;
+                ctx.font = "10px Consolas, Menlo, monospace";
+                const tw = ctx.measureText(label).width;
+                const lx = Math.max(padL, Math.min(px - tw / 2, cssW - padR - tw));
+                const ly = Math.max(padT + 10, py - 6);
+                ctx.fillStyle = "rgba(255,255,255,0.85)";
+                ctx.fillRect(lx - 3, ly - 10, tw + 6, 13);
+                ctx.fillStyle = s.color;
+                ctx.fillText(label, lx, ly);
+            }
+
             ctx.fillStyle = s.color;
             ctx.beginPath();
             ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
@@ -117,13 +144,13 @@ export function LineChart({
         let lx = padL + 4;
         for (const s of series) {
             ctx.fillStyle = s.color;
-            ctx.fillRect(lx, padT + 2, 10, 4);
+            ctx.fillRect(lx, padT - 10, 10, 4);
             ctx.fillStyle = "#605e5c";
             const label = s.name;
-            ctx.fillText(label, lx + 14, padT + 7);
+            ctx.fillText(label, lx + 14, padT - 5);
             lx += 16 + ctx.measureText(label).width + 14;
         }
-    }, [series, height, unit, maxY, minY]);
+    }, [series, height, unit, maxY, minY, markPeak]);
 
     return (
         <canvas
