@@ -31,9 +31,16 @@ import { shell } from "./privilege";
 const LS_KEY = "ads.adbCommands.custom.v1";
 
 export interface CommandResult {
+    /** 唯一 id（用于去重与滚动定位） */
+    id: number;
+    /** 用户看到的完整命令（含 adb / adb shell 前缀） */
     command: string;
+    /** 实际发给设备的命令（去掉前缀后） */
+    deviceCommand: string;
     output: string;
     ok: boolean;
+    /** 是否执行中（用于顶部命令台显示 spinner） */
+    pending?: boolean;
     time: string;
     /** 是否由网页原生实现（而非在设备 shell 执行） */
     native?: boolean;
@@ -51,9 +58,11 @@ class AdbCommandStore {
     category = "";
     /** 每条的复制反馈 */
     copiedId = "";
-    /** 执行结果 */
+    /** 执行历史（顶部命令台按时间倒序显示，最新在最上） */
     results: CommandResult[] = [];
     running = false;
+    /** 结果自增 id（非响应式） */
+    seqId = 0;
 
     /** 云端同步状态 */
     cloudState: CloudState = "idle";
@@ -62,7 +71,11 @@ class AdbCommandStore {
     lastSync = "";
 
     constructor() {
-        makeAutoObservable(this, {}, { autoBind: true });
+        makeAutoObservable(
+            this,
+            { seqId: false },
+            { autoBind: true },
+        );
         // 先加载本地缓存，保证离线也能用
         this.loadLocal();
     }
@@ -420,63 +433,102 @@ class AdbCommandStore {
         }, 1500);
     }
 
-    /** 在设备上执行命令（自动去掉 adb / adb shell 前缀；主机命令走原生实现） */
+    /**
+     * 执行命令，并**立即**在顶部命令台插入一条「执行中」记录，
+     * 完成后原地更新为结果（成功/失败 + 输出）。
+     *
+     * 这样即便命令较慢，用户也能在顶部看到它正在跑，而不是「点了没反应」。
+     */
     async run(cmd: AdbCommand) {
         const adb = connection.adb;
-        if (!adb || this.running) return;
-
-        const time = new Date().toLocaleTimeString();
-        runInAction(() => {
-            this.running = true;
-        });
-
-        // 主机命令：网页无法直接执行 adb（那是电脑端程序），
-        // 能原生替代的走原生实现，否则给出明确说明与替代路径。
-        if (cmd.host) {
-            const native = await this.runNative(cmd).catch((e) => ({
-                output: `执行失败：${e instanceof Error ? e.message : String(e)}`,
+        if (!adb) {
+            this.pushResult({
+                command: cmd.command,
+                deviceCommand: cmd.command,
+                output: "未连接设备，无法执行。请先在左侧连接设备。",
                 ok: false,
-            }));
-            runInAction(() => {
-                this.results = [
-                    {
-                        command: cmd.command,
-                        output: native.output,
-                        ok: native.ok,
-                        time,
-                        native: true,
-                    },
-                    ...this.results.slice(0, 19),
-                ];
-                this.running = false;
+                native: !!cmd.host,
             });
             return;
         }
+        if (this.running) return;
 
-        let command = cmd.command.trim();
-        if (command.startsWith("adb shell ")) command = command.slice(10);
-        else if (command.startsWith("adb ")) command = command.slice(4);
+        // 计算实际发给设备的命令（去掉 adb / adb shell 前缀）
+        let deviceCommand = cmd.command.trim();
+        if (deviceCommand.startsWith("adb shell ")) deviceCommand = deviceCommand.slice(10);
+        else if (deviceCommand.startsWith("adb ")) deviceCommand = deviceCommand.slice(4);
+
+        const id = ++this.seqId;
+        const time = new Date().toLocaleTimeString();
+
+        runInAction(() => {
+            this.running = true;
+            this.results = [
+                {
+                    id,
+                    command: cmd.command,
+                    deviceCommand,
+                    output: "",
+                    ok: true,
+                    pending: true,
+                    time,
+                    native: !!cmd.host,
+                },
+                ...this.results.slice(0, 49),
+            ];
+        });
 
         try {
-            const out = await shell(adb, command);
-            runInAction(() => {
-                this.results = [
-                    { command, output: out.trim() || "(无输出)", ok: true, time },
-                    ...this.results.slice(0, 19),
-                ];
-            });
+            let output: string;
+            let ok = true;
+            if (cmd.host) {
+                // 主机命令：走原生实现（给出等价结果或跳转指引）
+                const native = await this.runNative(cmd).catch((e) => ({
+                    output: `执行失败：${e instanceof Error ? e.message : String(e)}`,
+                    ok: false,
+                }));
+                output = native.output;
+                ok = native.ok;
+            } else {
+                const out = await shell(adb, deviceCommand);
+                output = out.trim() || "(无输出)";
+            }
+            this.updateResult(id, { output, ok, pending: false });
         } catch (e) {
-            runInAction(() => {
-                this.results = [
-                    { command, output: (e as Error).message, ok: false, time },
-                    ...this.results.slice(0, 19),
-                ];
+            const message = e instanceof Error ? e.message : String(e);
+            this.updateResult(id, {
+                output: `执行失败：${message}`,
+                ok: false,
+                pending: false,
             });
         } finally {
             runInAction(() => {
                 this.running = false;
             });
         }
+    }
+
+    /** 插入一条结果到顶部 */
+    private pushResult(partial: Omit<CommandResult, "id" | "time">) {
+        runInAction(() => {
+            this.results = [
+                {
+                    id: ++this.seqId,
+                    time: new Date().toLocaleTimeString(),
+                    ...partial,
+                },
+                ...this.results.slice(0, 49),
+            ];
+        });
+    }
+
+    /** 原地更新某条结果 */
+    private updateResult(id: number, patch: Partial<CommandResult>) {
+        runInAction(() => {
+            this.results = this.results.map((r) =>
+                r.id === id ? { ...r, ...patch } : r,
+            );
+        });
     }
 
     /**
@@ -558,6 +610,28 @@ class AdbCommandStore {
 
     clearResults() {
         this.results = [];
+    }
+
+    /** 把执行历史导出为文本（供顶部命令台下载） */
+    exportResults(): string {
+        const lines: string[] = [
+            "Android Device Studio — 命令执行记录",
+            `导出时间：${new Date().toLocaleString()}`,
+            `共 ${this.results.length} 条`,
+            "".padEnd(60, "="),
+        ];
+        // 按时间正序输出（最早的在前）
+        for (const r of [...this.results].reverse()) {
+            lines.push("");
+            lines.push(`[${r.time}] ${r.ok ? "OK" : "FAILED"}  ${r.command}`);
+            if (r.deviceCommand && r.deviceCommand !== r.command) {
+                lines.push(`  设备命令: ${r.deviceCommand}`);
+            }
+            if (r.native) lines.push("  (网页原生实现)");
+            lines.push("-".repeat(50));
+            lines.push(r.pending ? "(执行中…)" : r.output || "(无输出)");
+        }
+        return lines.join("\n");
     }
 }
 

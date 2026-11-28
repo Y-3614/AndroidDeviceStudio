@@ -1,7 +1,6 @@
 import {
     DefaultButton,
-    Dropdown,
-    type IDropdownOption,
+    Label,
     MessageBar,
     MessageBarType,
     PrimaryButton,
@@ -12,6 +11,8 @@ import {
 } from "@fluentui/react";
 import { observer } from "mobx-react-lite";
 import { useEffect, useRef, useState } from "react";
+import { LineChart } from "../components/LineChart";
+import { OpProgress } from "../components/OpProgress";
 import { connection } from "../state/connection";
 import { i18n } from "../state/i18n";
 import { saveBlob } from "../state/file-stream";
@@ -55,47 +56,11 @@ const preview: React.CSSProperties = {
     ...mono,
 };
 
-/** 简易趋势条（不引入图表库，保持体积） */
-function Trend({ data, color, unit }: { data: number[]; color: string; unit: string }) {
-    const latest = data.length ? data[data.length - 1] : 0;
-    const max = Math.max(1, ...data);
-    return (
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color, minWidth: 62 }}>
-                {latest.toFixed(1)}
-                {unit}
-            </span>
-            <div
-                style={{
-                    flex: 1,
-                    height: 22,
-                    background: "#edebe9",
-                    borderRadius: 3,
-                    overflow: "hidden",
-                    display: "flex",
-                    alignItems: "flex-end",
-                    gap: 1,
-                }}
-            >
-                {data.slice(-60).map((v, i) => (
-                    <div
-                        key={i}
-                        style={{
-                            flex: 1,
-                            height: `${Math.max(4, (v / max) * 100)}%`,
-                            background: color,
-                            opacity: 0.85,
-                        }}
-                    />
-                ))}
-            </div>
-        </div>
-    );
-}
-
 export const TestScriptPage = observer(function TestScriptPage() {
     const t = i18n.t;
+    const zh = i18n.lang === "zh";
     const outRef = useRef<HTMLDivElement | null>(null);
+    const monkeyLogRef = useRef<HTMLDivElement | null>(null);
     const [appQuery, setAppQuery] = useState("");
 
     // 输出自动滚到底
@@ -105,6 +70,13 @@ export const TestScriptPage = observer(function TestScriptPage() {
         }
     }, [testScript.output.length]);
 
+    // Monkey 实时日志自动滚到底
+    useEffect(() => {
+        if (monkeyLogRef.current) {
+            monkeyLogRef.current.scrollTop = monkeyLogRef.current.scrollHeight;
+        }
+    }, [testScript.monkeyLiveLog.length]);
+
     if (!connection.isConnected) {
         return (
             <Stack styles={{ root: { padding: 16 } }}>
@@ -113,7 +85,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
         );
     }
 
-    /** 让用户选一个本地文件夹（用于日志/HCI/监控/包名导出） */
+    /** 让用户选一个本地文件夹 */
     const pickFolder = async (): Promise<FileSystemDirectoryHandle | undefined> => {
         const picker = (
             window as unknown as {
@@ -131,7 +103,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
         }
     };
 
-    const appFilterOptions: IDropdownOption[] = [
+    const appFilterOptions: { key: AppFilter; text: string }[] = [
         { key: "third", text: t.tsAppThird },
         { key: "system", text: t.tsAppSystem },
         { key: "all", text: t.tsAppAll },
@@ -139,15 +111,19 @@ export const TestScriptPage = observer(function TestScriptPage() {
 
     /** 应用范围三按钮（默认「仅第三方」） */
     const appFilterButtons = (
-        <Stack horizontal tokens={{ childrenGap: 0 }} styles={{ root: { alignSelf: "flex-end" } }}>
+        <Stack
+            horizontal
+            tokens={{ childrenGap: 0 }}
+            styles={{ root: { alignSelf: "flex-end" } }}
+        >
             {appFilterOptions.map((o, i) => {
                 const active = testScript.appFilter === o.key;
                 const isFirst = i === 0;
                 const isLast = i === appFilterOptions.length - 1;
                 return (
                     <button
-                        key={String(o.key)}
-                        onClick={() => void testScript.loadApps(o.key as AppFilter)}
+                        key={o.key}
+                        onClick={() => void testScript.loadApps(o.key)}
                         style={{
                             padding: "6px 14px",
                             fontSize: 13,
@@ -170,13 +146,28 @@ export const TestScriptPage = observer(function TestScriptPage() {
         </Stack>
     );
 
-    const appOptions: IDropdownOption[] = testScript.apps
-        .filter((a) => !appQuery || a.package.toLowerCase().includes(appQuery.toLowerCase()))
+    const appOptions = testScript.apps
+        .filter(
+            (a) => !appQuery || a.package.toLowerCase().includes(appQuery.toLowerCase()),
+        )
         .slice(0, 400)
         .map((a) => ({
             key: a.package,
             text: a.pid ? `${a.package} (pid ${a.pid})` : a.package,
         }));
+
+    const minToText = (sec: number) => {
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return `${m}分${String(s).padStart(2, "0")}秒`;
+    };
+
+    const leakLevelColor =
+        testScript.leakResult?.level === "likely"
+            ? "#a4262c"
+            : testScript.leakResult?.level === "slight"
+              ? "#8a6d00"
+              : "#107c10";
 
     return (
         <Stack
@@ -212,7 +203,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                 />
             </Stack>
 
-            {/* ── 一、日志拉取（每次新建时间戳文件夹） ── */}
+            {/* ── 一、日志拉取到电脑 ── */}
             <div style={card}>
                 <h3 style={h3}>{t.tsSectionPull}</h3>
                 <TextField
@@ -245,13 +236,11 @@ export const TestScriptPage = observer(function TestScriptPage() {
                             for (const r of results) saveBlob(r.blob, r.name);
                         }}
                     />
-                    {testScript.pullProgress && (
-                        <span style={{ fontSize: 12, color: "#0078d4" }}>
-                            {testScript.pullProgress}
-                        </span>
-                    )}
                 </Stack>
-                <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.tsPullFolderHint}</span>
+                <OpProgress bar={testScript.getProgress("pullProgress")} />
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>
+                    {t.tsPullFolderHint}
+                </span>
                 {testScript.lastPullFolder && (
                     <span style={{ fontSize: 12, color: "#107c10" }}>
                         ✓ {t.tsLastFolder}：{testScript.lastPullFolder}
@@ -274,6 +263,7 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         onClick={() => void testScript.removeDeviceLogs()}
                     />
                 </Stack>
+                <OpProgress bar={testScript.getProgress("cleanProgress")} />
                 <TextField
                     label={t.tsCleanPaths}
                     description={t.tsRemoveLogsHint}
@@ -338,22 +328,51 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         styles={{ root: { width: 180 } }}
                     />
                 </Stack>
+
+                {/* 执行方式 */}
+                <Stack tokens={{ childrenGap: 4 }}>
+                    <Label>{t.tsMonkeyMode}</Label>
+                    <Stack horizontal tokens={{ childrenGap: 16 }} wrap>
+                        <Toggle
+                            label={t.tsMonkeyModeFg}
+                            checked={testScript.monkeyMode === "fg"}
+                            onChange={(_, c) => {
+                                if (c) testScript.monkeyMode = "fg";
+                            }}
+                            disabled={testScript.monkeyRunning}
+                        />
+                        <Toggle
+                            label={t.tsMonkeyModeBg}
+                            checked={testScript.monkeyMode === "bg"}
+                            onChange={(_, c) => {
+                                if (c) testScript.monkeyMode = "bg";
+                            }}
+                            disabled={testScript.monkeyRunning}
+                        />
+                    </Stack>
+                </Stack>
+
                 <div>
                     <div style={{ fontSize: 12, color: "#605e5c", marginBottom: 4 }}>
                         {t.tsMonkeyPreview}
                     </div>
                     <pre style={preview}>{testScript.buildMonkeyCommand()}</pre>
                 </div>
-                <Stack horizontal tokens={{ childrenGap: 8 }} wrap>
+
+                <Stack horizontal tokens={{ childrenGap: 8 }} wrap verticalAlign="center">
                     {testScript.monkeyRunning ? (
                         <DefaultButton
                             text={t.tsStopMonkey}
                             iconProps={{ iconName: "Stop" }}
-                            onClick={() => testScript.stopMonkey()}
+                            onClick={() => void testScript.stopMonkey()}
                         />
                     ) : (
                         <PrimaryButton
-                            text={t.tsRunMonkey}
+                            text={
+                                testScript.monkeyMode === "fg"
+                                    ? t.tsRunMonkey
+                                    : t.tsRunMonkeyBg
+                            }
                             iconProps={{ iconName: "Play" }}
                             onClick={() => void testScript.runMonkey()}
                         />
@@ -368,12 +387,85 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         iconProps={{ iconName: "Delete" }}
                         onClick={() => void testScript.killMonkey()}
                     />
+                    {testScript.monkeyRunning && (
+                        <span style={{ fontSize: 12, color: "#0078d4" }}>
+                            ⏳ {t.tsMonkeyRunning}
+                        </span>
+                    )}
+                    {testScript.monkeyFinished && !testScript.monkeyRunning && (
+                        <span style={{ fontSize: 12, color: "#107c10" }}>
+                            ✓ {t.tsMonkeyFinished}
+                        </span>
+                    )}
                 </Stack>
+
                 {testScript.monkeyCheck && (
                     <pre style={{ ...preview, maxHeight: 160, overflowY: "auto" }}>
                         {testScript.monkeyCheck}
                     </pre>
                 )}
+
+                {/* Monkey 实时日志 */}
+                <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
+                    <b style={{ flex: 1, fontSize: 13 }}>{t.tsMonkeyLiveLog}</b>
+                    <span style={{ fontSize: 11, color: "#a19f9d" }}>
+                        {testScript.monkeyLiveLog.length} {t.tsLines}
+                    </span>
+                    <DefaultButton
+                        text={t.tsMonkeySaveLog}
+                        iconProps={{ iconName: "Save" }}
+                        disabled={testScript.monkeyLiveLog.length === 0}
+                        onClick={async () => {
+                            const dir = await pickFolder();
+                            if (dir)
+                                await testScript.saveMonkeyLog(dir).catch(() => false);
+                        }}
+                    />
+                    <DefaultButton
+                        text={t.tsMonkeyDownloadLog}
+                        iconProps={{ iconName: "Download" }}
+                        disabled={testScript.monkeyLiveLog.length === 0}
+                        onClick={() => void testScript.saveMonkeyLog()}
+                    />
+                    <DefaultButton
+                        text={t.tsClearOutput}
+                        disabled={testScript.monkeyLiveLog.length === 0}
+                        onClick={() => testScript.clearMonkeyLog()}
+                    />
+                </Stack>
+                <div
+                    ref={monkeyLogRef}
+                    style={{
+                        height: 240,
+                        minHeight: 100,
+                        maxHeight: 640,
+                        resize: "vertical",
+                        overflow: "auto",
+                        background: "#1e1e1e",
+                        borderRadius: 4,
+                        padding: 8,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                        ...mono,
+                    }}
+                >
+                    {testScript.monkeyLiveLog.length === 0 ? (
+                        <span style={{ color: "#8c8c8c" }}>
+                            {zh
+                                ? "（点「前台运行 Monkey」后，monkey 日志会实时打印在这里）"
+                                : "(Monkey log will stream here after you run it in foreground)"}
+                        </span>
+                    ) : (
+                        testScript.monkeyLiveLog.map((l, i) => (
+                            <div key={i} style={{ color: "#d4d4d4" }}>
+                                {l}
+                            </div>
+                        ))
+                    )}
+                </div>
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>
+                    {t.tsMonkeyStopHint}
+                </span>
             </div>
 
             {/* ── 四、蓝牙 HCI ── */}
@@ -406,12 +498,9 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         iconProps={{ iconName: "Delete" }}
                         onClick={() => void testScript.removeHci()}
                     />
-                    {testScript.hciExportProgress && (
-                        <span style={{ fontSize: 12, color: "#0078d4" }}>
-                            {testScript.hciExportProgress}
-                        </span>
-                    )}
                 </Stack>
+                <OpProgress bar={testScript.getProgress("hciExport")} />
+                <OpProgress bar={testScript.getProgress("hciRemove")} />
             </div>
 
             {/* ── 五、CPU / 内存监控 ── */}
@@ -448,33 +537,110 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         />
                     )}
                     <DefaultButton
+                        text={t.tsDetectLeak}
+                        iconProps={{ iconName: "SearchIssue" }}
+                        disabled={testScript.monitorSampleCount < 5}
+                        onClick={() => testScript.detectLeak()}
+                    />
+                    <DefaultButton
                         text={t.tsExportMonitor}
                         iconProps={{ iconName: "Download" }}
                         onClick={async () => {
                             const dir = await pickFolder();
-                            if (dir) await testScript.exportMonitor(dir).catch(() => false);
+                            if (dir)
+                                await testScript.exportMonitor(dir).catch(() => false);
                         }}
                     />
+                </Stack>
+                <Stack horizontal tokens={{ childrenGap: 20 }} wrap>
+                    <span style={{ fontSize: 12, color: "#605e5c" }}>
+                        {t.tsMonitorSamples}：<b>{testScript.monitorSampleCount}</b>
+                    </span>
+                    <span style={{ fontSize: 12, color: "#605e5c" }}>
+                        {t.tsMonitorDuration}：
+                        <b>{minToText(testScript.monitorDurationSec)}</b>
+                    </span>
                     {testScript.lastSampleAt && (
-                        <span style={{ fontSize: 12, color: "#605e5c", alignSelf: "center" }}>
+                        <span style={{ fontSize: 12, color: "#605e5c" }}>
                             {t.tsLastSample}：{testScript.lastSampleAt}
                         </span>
                     )}
                 </Stack>
+                <OpProgress bar={testScript.getProgress("monitorExport")} />
+
                 <div>
                     <div style={{ fontSize: 12, color: "#605e5c", marginBottom: 4 }}>
                         {t.tsCpuUsage}
                     </div>
-                    <Trend data={testScript.cpuHistory} color="#d13438" unit="%" />
+                    <LineChart
+                        series={[
+                            {
+                                name: "CPU",
+                                color: "#d13438",
+                                data: testScript.cpuHistory,
+                            },
+                        ]}
+                        maxY={100}
+                        height={140}
+                    />
                 </div>
                 <div>
                     <div style={{ fontSize: 12, color: "#605e5c", marginBottom: 4 }}>
                         {t.tsMemUsage}
                     </div>
-                    <Trend data={testScript.memHistory} color="#0078d4" unit="%" />
+                    <LineChart
+                        series={[
+                            {
+                                name: "MEM",
+                                color: "#0078d4",
+                                data: testScript.memHistory,
+                            },
+                        ]}
+                        maxY={100}
+                        height={140}
+                    />
                 </div>
+
+                {/* 内存泄露检测结果 */}
+                {testScript.leakResult && (
+                    <div
+                        style={{
+                            border: `1px solid ${leakLevelColor}`,
+                            borderRadius: 4,
+                            padding: 10,
+                            background: "#fff",
+                        }}
+                    >
+                        <div
+                            style={{
+                                fontWeight: 600,
+                                color: leakLevelColor,
+                                marginBottom: 6,
+                            }}
+                        >
+                            {t.tsLeakTitle}：
+                            {testScript.leakResult.level === "likely"
+                                ? t.tsLeakLikely
+                                : testScript.leakResult.level === "slight"
+                                  ? t.tsLeakSlight
+                                  : t.tsLeakNone}
+                        </div>
+                        <pre
+                            style={{
+                                ...preview,
+                                background: "#faf9f8",
+                                color: "#323130",
+                                maxHeight: 200,
+                                overflowY: "auto",
+                            }}
+                        >
+                            {testScript.leakResult.detail}
+                        </pre>
+                    </div>
+                )}
+
                 {(testScript.cpuSample || testScript.memSample) && (
-                    <pre style={{ ...preview, maxHeight: 180, overflowY: "auto" }}>
+                    <pre style={{ ...preview, maxHeight: 200, overflowY: "auto" }}>
                         {`# CPU\n${testScript.cpuSample ?? ""}\n\n# MEM\n${testScript.memSample ?? ""}`}
                     </pre>
                 )}
@@ -508,20 +674,30 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         iconProps={{ iconName: "Download" }}
                         onClick={async () => {
                             const dir = await pickFolder();
-                            if (dir) await testScript.exportAppList(dir).catch(() => false);
+                            if (dir)
+                                await testScript.exportAppList(dir).catch(() => false);
                         }}
                     />
                 </Stack>
-                <Dropdown
-                    placeholder={`${t.tsAppsLoaded}${testScript.apps.length}`}
-                    selectedKey={testScript.selectedPackage || undefined}
-                    options={appOptions}
-                    onChange={(_, o) =>
-                        (testScript.selectedPackage = String(o?.key ?? ""))
-                    }
-                    styles={{ root: { maxWidth: 560 } }}
-                />
-                <Stack horizontal tokens={{ childrenGap: 12 }} wrap verticalAlign="center">
+                <OpProgress bar={testScript.getProgress("appListExport")} />
+                <Stack
+                    horizontal
+                    tokens={{ childrenGap: 12 }}
+                    wrap
+                    verticalAlign="center"
+                >
+                    <TextField
+                        placeholder={`${t.tsAppsLoaded}${testScript.apps.length}`}
+                        value={testScript.selectedPackage}
+                        onChange={(_, v) => (testScript.selectedPackage = v ?? "")}
+                        list="pkg-list"
+                        styles={{ root: { minWidth: 360 } }}
+                    />
+                    <datalist id="pkg-list">
+                        {appOptions.map((o) => (
+                            <option key={String(o.key)} value={String(o.key)} />
+                        ))}
+                    </datalist>
                     <Toggle
                         label={t.tsLaunchFirstStop}
                         checked={testScript.launchForceStop}
@@ -536,11 +712,11 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         }
                     />
                     <DefaultButton
-                        text={t.tsOpenAppInfo}
-                        iconProps={{ iconName: "Info" }}
+                        text={t.tsOpenApp}
+                        iconProps={{ iconName: "OpenInNewWindow" }}
                         disabled={!testScript.selectedPackage}
                         onClick={() =>
-                            void testScript.openAppInfo(testScript.selectedPackage)
+                            void testScript.openApp(testScript.selectedPackage)
                         }
                     />
                     <DefaultButton
@@ -603,7 +779,9 @@ export const TestScriptPage = observer(function TestScriptPage() {
                         ))
                     )}
                 </div>
-                <span style={{ fontSize: 11, color: "#a19f9d" }}>{t.tsOutputResizeHint}</span>
+                <span style={{ fontSize: 11, color: "#a19f9d" }}>
+                    {t.tsOutputResizeHint}
+                </span>
             </div>
         </Stack>
     );

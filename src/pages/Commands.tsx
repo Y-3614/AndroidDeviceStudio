@@ -22,9 +22,8 @@ import { adbCommands, type AdbCommand } from "../state/commands-store";
 import { connection } from "../state/connection";
 import { i18n } from "../state/i18n";
 
-/** 命令大全页：内置 100+ 条（不可删）+ 用户自定义（可增删改，云端共享） */
+/** 命令大全页：内置 112 条（不可删）+ 用户自定义（可增删改，云端共享） */
 export const CommandsPage = observer(function CommandsPage() {
-    const t = i18n.t;
     const zh = i18n.lang === "zh";
 
     const [editing, setEditing] = useState<AdbCommand | undefined>();
@@ -36,10 +35,10 @@ export const CommandsPage = observer(function CommandsPage() {
     const [notice, setNotice] = useState<string | undefined>();
     /** 折叠的分类（默认全部展开） */
     const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-    /** 就地弹出的执行结果对话框 */
-    const [dialogCmd, setDialogCmd] = useState<string | undefined>();
     /** 是否显示「仅网页可执行」 */
     const [onlyRunnable, setOnlyRunnable] = useState(false);
+    /** 命令台是否折叠 */
+    const [consoleCollapsed, setConsoleCollapsed] = useState(false);
 
     // 进入页面时从云端拉取（失败自动降级本地）
     useEffect(() => {
@@ -109,14 +108,22 @@ export const CommandsPage = observer(function CommandsPage() {
         setNotice(zh ? "已删除。" : "Deleted.");
     };
 
-    /** 执行并就地弹出结果 */
-    const runAndShow = async (cmd: AdbCommand) => {
-        setDialogCmd(cmd.command);
-        await adbCommands.run(cmd);
-    };
-
     const toggleGroup = (category: string) => {
         setCollapsed((prev) => ({ ...prev, [category]: !prev[category] }));
+    };
+
+    /** 下载命令台执行记录 */
+    const downloadResults = () => {
+        const text = adbCommands.exportResults();
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `adb-command-log-${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
     };
 
     const categoryOptions: IDropdownOption[] = adbCommands.categories.map((c) => ({
@@ -134,8 +141,6 @@ export const CommandsPage = observer(function CommandsPage() {
             }))
             .filter((g) => g.items.length > 0);
     }, [adbCommands.grouped, onlyRunnable]);
-
-    const execResult = adbCommands.results[0];
 
     const cloudBadge = () => {
         switch (adbCommands.cloudState) {
@@ -167,6 +172,8 @@ export const CommandsPage = observer(function CommandsPage() {
         }
     };
 
+    const pendingCount = adbCommands.results.filter((r) => r.pending).length;
+
     return (
         <Stack
             styles={{
@@ -186,9 +193,161 @@ export const CommandsPage = observer(function CommandsPage() {
             </h2>
             <p style={{ color: "#605e5c", margin: 0, lineHeight: 1.7 }}>
                 {zh
-                    ? `内置 ${adbCommands.builtinCount} 条命令（不可删除、不可修改），并补充了内核与系统常用命令。标记「网页可执行」的带 adb shell 前缀，可直接在当前设备运行；标记「电脑端」的需在本机命令行执行，其中不少在网页里有等价功能（会给出跳转提示）。新增的命令会共享给所有打开本网站的人。`
-                    : `${adbCommands.builtinCount} built-in commands (not editable). Those marked “web-runnable” (adb shell …) run on the connected device; those marked “host” must run on your computer, and many have an equivalent page in this web app.`}
+                    ? `内置 ${adbCommands.builtinCount} 条命令（不可删除、不可修改），并补充了内核与系统常用命令。标记「网页可执行」的带 adb shell 前缀，可直接在当前设备运行；标记「电脑端」的需在本机命令行执行，其中不少在网页里有等价功能（会给出跳转提示）。下方「命令执行台」会记录每一次执行。`
+                    : `${adbCommands.builtinCount} built-in commands (not editable). Those marked “web-runnable” (adb shell …) run on the connected device; those marked “host” must run on your computer, and many have an equivalent page in this web app. The console below records every execution.`}
             </p>
+
+            {/* ── 命令执行台（常驻顶部，集中显示所有执行过的命令）── */}
+            <div
+                style={{
+                    border: "1px solid #c7e0f4",
+                    borderRadius: 6,
+                    background: "#f3f9fd",
+                    flexShrink: 0,
+                }}
+            >
+                <Stack
+                    horizontal
+                    tokens={{ childrenGap: 8 }}
+                    verticalAlign="center"
+                    styles={{
+                        root: {
+                            padding: "8px 10px",
+                            borderBottom: consoleCollapsed ? "none" : "1px solid #c7e0f4",
+                        },
+                    }}
+                >
+                    <Icon
+                        iconName={consoleCollapsed ? "ChevronRight" : "ChevronDown"}
+                        onClick={() => setConsoleCollapsed((v) => !v)}
+                        styles={{
+                            root: { fontSize: 12, cursor: "pointer", color: "#0078d4" },
+                        }}
+                    />
+                    <b style={{ flex: 1, fontSize: 14, color: "#005a9e" }}>
+                        {zh ? "命令执行台" : "Command console"}
+                        {adbCommands.results.length > 0 && (
+                            <span
+                                style={{ color: "#605e5c", fontWeight: 400, marginLeft: 6 }}
+                            >
+                                ({adbCommands.results.length})
+                            </span>
+                        )}
+                        {pendingCount > 0 && (
+                            <span
+                                style={{
+                                    marginLeft: 8,
+                                    fontSize: 12,
+                                    color: "#0078d4",
+                                    fontWeight: 400,
+                                }}
+                            >
+                                <Spinner size={SpinnerSize.xSmall} />{" "}
+                                {zh ? "执行中…" : "running…"}
+                            </span>
+                        )}
+                    </b>
+                    <DefaultButton
+                        text={zh ? "下载记录" : "Download log"}
+                        iconProps={{ iconName: "Download" }}
+                        disabled={adbCommands.results.length === 0}
+                        onClick={downloadResults}
+                    />
+                    <DefaultButton
+                        text={zh ? "清空" : "Clear"}
+                        disabled={adbCommands.results.length === 0}
+                        onClick={() => adbCommands.clearResults()}
+                    />
+                </Stack>
+                {!consoleCollapsed && (
+                    <div
+                        style={{
+                            maxHeight: 260,
+                            overflowY: "auto",
+                            padding: "8px 10px",
+                            fontFamily: "Consolas, Menlo, monospace",
+                            fontSize: 12,
+                        }}
+                    >
+                        {adbCommands.results.length === 0 ? (
+                            <div style={{ color: "#a19f9d" }}>
+                                {zh
+                                    ? "还没有执行记录。点命令右侧的 ▶ 执行后，这里会显示每条命令及其输出。"
+                                    : "No executions yet. Click ▶ on a command to run it; results appear here."}
+                            </div>
+                        ) : (
+                            adbCommands.results.map((r) => (
+                                <div
+                                    key={r.id}
+                                    style={{
+                                        marginBottom: 8,
+                                        borderBottom: "1px dashed #dbe9f5",
+                                        paddingBottom: 6,
+                                    }}
+                                >
+                                    <div style={{ color: "#005a9e", fontWeight: 600 }}>
+                                        [{r.time}] $ {r.command}
+                                        {r.pending ? (
+                                            <span
+                                                style={{
+                                                    color: "#0078d4",
+                                                    fontWeight: 400,
+                                                }}
+                                            >
+                                                {"  "}
+                                                {zh ? "执行中…" : "running…"}
+                                            </span>
+                                        ) : (
+                                            <span
+                                                style={{
+                                                    color: r.ok ? "#107c10" : "#a4262c",
+                                                    fontWeight: 400,
+                                                }}
+                                            >
+                                                {"  "}
+                                                {r.ok
+                                                    ? zh
+                                                        ? "✓ 完成"
+                                                        : "✓ done"
+                                                    : zh
+                                                      ? "✗ 失败"
+                                                      : "✗ failed"}
+                                            </span>
+                                        )}
+                                        {r.native && (
+                                            <span
+                                                style={{
+                                                    marginLeft: 6,
+                                                    fontSize: 11,
+                                                    color: "#8a6d00",
+                                                    background: "#fff4ce",
+                                                    padding: "0 5px",
+                                                    borderRadius: 3,
+                                                    fontWeight: 400,
+                                                }}
+                                            >
+                                                {zh ? "网页原生" : "native"}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {!r.pending && (
+                                        <pre
+                                            style={{
+                                                margin: "4px 0 0",
+                                                whiteSpace: "pre-wrap",
+                                                wordBreak: "break-all",
+                                                color: r.ok ? "#323130" : "#a4262c",
+                                            }}
+                                        >
+                                            {r.output}
+                                        </pre>
+                                    )}
+                                </div>
+                            ))
+                        )}
+                    </div>
+                )}
+            </div>
 
             {cloudBadge()}
 
@@ -211,7 +370,10 @@ export const CommandsPage = observer(function CommandsPage() {
                 />
                 <Dropdown
                     placeholder={zh ? "全部分类" : "All categories"}
-                    options={[{ key: "", text: zh ? "全部分类" : "All" }, ...categoryOptions]}
+                    options={[
+                        { key: "", text: zh ? "全部分类" : "All" },
+                        ...categoryOptions,
+                    ]}
                     selectedKey={adbCommands.category}
                     onChange={(_, o) => adbCommands.setCategory(String(o?.key ?? ""))}
                     styles={{ root: { width: 170 } }}
@@ -219,7 +381,10 @@ export const CommandsPage = observer(function CommandsPage() {
                 <Dropdown
                     options={[
                         { key: "all", text: zh ? "全部命令" : "All commands" },
-                        { key: "runnable", text: zh ? "仅网页可执行" : "Web-runnable only" },
+                        {
+                            key: "runnable",
+                            text: zh ? "仅网页可执行" : "Web-runnable only",
+                        },
                     ]}
                     selectedKey={onlyRunnable ? "runnable" : "all"}
                     onChange={(_, o) => setOnlyRunnable(o?.key === "runnable")}
@@ -287,7 +452,9 @@ export const CommandsPage = observer(function CommandsPage() {
                                 }}
                             >
                                 <Icon
-                                    iconName={isCollapsed ? "ChevronRight" : "ChevronDown"}
+                                    iconName={
+                                        isCollapsed ? "ChevronRight" : "ChevronDown"
+                                    }
                                     styles={{ root: { fontSize: 12, color: "#605e5c" } }}
                                 />
                                 <span
@@ -371,7 +538,9 @@ export const CommandsPage = observer(function CommandsPage() {
                                                             borderRadius: 3,
                                                         }}
                                                     >
-                                                        {zh ? "网页可执行" : "web-runnable"}
+                                                        {zh
+                                                            ? "网页可执行"
+                                                            : "web-runnable"}
                                                     </span>
                                                 )}
                                                 {c.danger && (
@@ -420,19 +589,12 @@ export const CommandsPage = observer(function CommandsPage() {
                                             <IconButton
                                                 iconProps={{ iconName: "Play" }}
                                                 title={
-                                                    c.host
-                                                        ? zh
-                                                            ? "执行（给出等价说明）"
-                                                            : "Run (with explanation)"
-                                                        : zh
-                                                          ? "在设备上执行"
-                                                          : "Run on device"
+                                                    zh
+                                                        ? "执行（结果显示在顶部命令台）"
+                                                        : "Run (result shows in console)"
                                                 }
-                                                disabled={
-                                                    !connection.isConnected ||
-                                                    adbCommands.running
-                                                }
-                                                onClick={() => void runAndShow(c)}
+                                                disabled={!connection.isConnected}
+                                                onClick={() => void adbCommands.run(c)}
                                             />
                                             {!c.builtin && c.mine !== false && (
                                                 <>
@@ -442,7 +604,9 @@ export const CommandsPage = observer(function CommandsPage() {
                                                         onClick={() => openEdit(c)}
                                                     />
                                                     <IconButton
-                                                        iconProps={{ iconName: "Delete" }}
+                                                        iconProps={{
+                                                            iconName: "Delete",
+                                                        }}
                                                         title={zh ? "删除" : "Delete"}
                                                         onClick={() => void remove(c)}
                                                     />
@@ -480,66 +644,6 @@ export const CommandsPage = observer(function CommandsPage() {
                     {zh ? "没有匹配的命令。" : "No matching commands."}
                 </div>
             )}
-
-            {/* 执行结果对话框（就地弹出，不占列表空间） */}
-            <Dialog
-                hidden={!dialogCmd}
-                onDismiss={() => {
-                    setDialogCmd(undefined);
-                    adbCommands.clearResults();
-                }}
-                dialogContentProps={{
-                    type: DialogType.close,
-                    title: zh ? "执行结果" : "Execution result",
-                    subText: dialogCmd,
-                }}
-                modalProps={{ isBlocking: false }}
-                minWidth={520}
-            >
-                {!execResult || execResult.command !== dialogCmd ? (
-                    <Stack horizontal tokens={{ childrenGap: 8 }} verticalAlign="center">
-                        <Spinner size={SpinnerSize.small} />
-                        <span>{zh ? "执行中…" : "Running…"}</span>
-                    </Stack>
-                ) : (
-                    <Stack tokens={{ childrenGap: 6 }}>
-                        {execResult.native && (
-                            <MessageBar messageBarType={MessageBarType.info}>
-                                {zh
-                                    ? "该命令为电脑端 adb 命令，此处给出网页内的等价结果或操作指引。"
-                                    : "This is a host adb command; the web app shows an equivalent result or guidance."}
-                            </MessageBar>
-                        )}
-                        <pre
-                            style={{
-                                margin: 0,
-                                whiteSpace: "pre-wrap",
-                                wordBreak: "break-all",
-                                fontFamily: "Consolas, Menlo, monospace",
-                                fontSize: 12,
-                                color: execResult.ok ? "#323130" : "#a4262c",
-                                background: "#faf9f8",
-                                border: "1px solid #edebe9",
-                                borderRadius: 4,
-                                padding: 8,
-                                maxHeight: 320,
-                                overflow: "auto",
-                            }}
-                        >
-                            {execResult.output}
-                        </pre>
-                    </Stack>
-                )}
-                <DialogFooter>
-                    <DefaultButton
-                        text={zh ? "关闭" : "Close"}
-                        onClick={() => {
-                            setDialogCmd(undefined);
-                            adbCommands.clearResults();
-                        }}
-                    />
-                </DialogFooter>
-            </Dialog>
 
             {/* 新增 / 修改对话框 */}
             <Dialog

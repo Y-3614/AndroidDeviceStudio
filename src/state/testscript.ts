@@ -102,6 +102,14 @@ export interface ScriptLogEntry {
 
 export type AppFilter = "all" | "third" | "system";
 
+/** 某个操作的进度信息 */
+export interface ProgressBar {
+    percent: number;
+    text: string;
+    done: boolean;
+    ok?: boolean;
+}
+
 class TestScriptStore {
     // ---- 日志拉取 ----
     /** 拉取路径列表（每行一个，可改） */
@@ -119,8 +127,20 @@ class TestScriptStore {
     monkeyThrottle = 500;
     monkeyEvents = 1200000;
     monkeyRunning = false;
+    /** 执行方式：前台（实时日志） / 后台（写设备文件） */
+    monkeyMode: "fg" | "bg" = "fg";
     /** 自检结果文本 */
     monkeyCheck = "";
+    /** Monkey 实时日志（原始行） */
+    monkeyLiveLog: string[] = [];
+    /** Monkey 是否已结束（用于结果反馈） */
+    monkeyFinished = false;
+    /** 设备端 monkey 日志文件路径（后台模式） */
+    monkeyLogFile = "";
+    /** 前台执行时的会话句柄（用于停止） */
+    monkeyAbort: { kill: () => Promise<void> | void } | undefined = undefined;
+    /** 是否由用户主动停止（用于退出码判断） */
+    monkeyStoppedByUser = false;
 
     // ---- 蓝牙 HCI ----
     hciExportProgress = "";
@@ -130,13 +150,31 @@ class TestScriptStore {
     monitoring = false;
     cpuSample?: string;
     memSample?: string;
-    /** 历史采样（用于绘制趋势，仅保留最近 N 条） */
+    /** 历史采样（用于绘制实时曲线）；每点含时间戳与 CPU/内存值 */
     cpuHistory: number[] = [];
     memHistory: number[] = [];
+    /** 每次采样的时间标签（与 history 对齐） */
+    sampleTimes: string[] = [];
     /** 监控日志行（用于导出） */
     monitorLog: string[] = [];
     /** 上次采样时间 */
     lastSampleAt = "";
+    /** 采集开始时间（用于计算时长） */
+    monitorStartedAt = 0;
+    /** 内存泄露检测结果 */
+    leakResult:
+        | {
+              level: "none" | "slight" | "likely";
+              startMem: number;
+              endMem: number;
+              growth: number;
+              growthPerMin: number;
+              r2: number;
+              detail: string;
+          }
+        | undefined = undefined;
+    /** 各操作的进度信息（0-100 + 描述 + 完成状态） */
+    progress: Record<string, ProgressBar> = {};
 
     // ---- 应用管理 ----
     apps: { package: string; pid: number; system: boolean }[] = [];
@@ -153,7 +191,15 @@ class TestScriptStore {
     monitorTimer: ReturnType<typeof setInterval> | undefined;
 
     constructor() {
-        makeAutoObservable(this, {}, { autoBind: true });
+        makeAutoObservable(
+            this,
+            {
+                // 会话句柄与定时器不参与响应式
+                monkeyAbort: false,
+                monitorTimer: false,
+            },
+            { autoBind: true },
+        );
         this.load();
     }
 
@@ -225,6 +271,38 @@ class TestScriptStore {
         this.output = [];
     }
 
+    /* ---------------- 进度反馈 ---------------- */
+
+    /** 设置某个操作的进度（0-100） */
+    setProgress(
+        key: string,
+        percent: number,
+        text: string,
+        done = false,
+        ok?: boolean,
+    ) {
+        runInAction(() => {
+            this.progress = {
+                ...this.progress,
+                [key]: { percent: Math.max(0, Math.min(100, percent)), text, done, ok },
+            };
+        });
+    }
+
+    /** 清除某个操作的进度 */
+    clearProgress(key: string) {
+        runInAction(() => {
+            const next = { ...this.progress };
+            delete next[key];
+            this.progress = next;
+        });
+    }
+
+    /** 读取某个操作的进度 */
+    getProgress(key: string) {
+        return this.progress[key];
+    }
+
     private get adb(): Adb | undefined {
         return connection.adb;
     }
@@ -252,7 +330,7 @@ class TestScriptStore {
         }
     }
 
-    /** 删除设备上的历史日志文件（来自 02_rm_device_log_file.bat） */
+    /** 删除设备上的历史日志文件（来自 02_rm_device_log_file.bat，带进度） */
     async removeDeviceLogs() {
         const paths = this.cleanPaths
             .split("\n")
@@ -262,13 +340,32 @@ class TestScriptStore {
             this.append("清理路径为空", "err");
             return;
         }
+        const key = "cleanProgress";
+        this.setProgress(key, 0, `准备清理 ${paths.length} 个路径…`);
+        let done = 0;
         try {
             for (const p of paths) {
                 await this.exec(`rm -rf ${q(p)}`, `删除 ${p}`);
+                done++;
+                this.setProgress(
+                    key,
+                    Math.round((done / paths.length) * 100),
+                    `已清理 ${done}/${paths.length}：${p}`,
+                );
             }
+            this.setProgress(key, 100, `已完成（${paths.length} 个路径）`, true, true);
             this.append("设备日志目录已清理", "ok");
+            setTimeout(() => this.clearProgress(key), 4000);
         } catch (e) {
+            this.setProgress(
+                key,
+                100,
+                `失败（已清理 ${done}/${paths.length}）：${(e as Error).message}`,
+                true,
+                false,
+            );
             this.append(`清理失败：${(e as Error).message}`, "err");
+            setTimeout(() => this.clearProgress(key), 6000);
         }
     }
 
@@ -299,6 +396,8 @@ class TestScriptStore {
             this.pullProgress = "";
             this.lastPullFolder = "";
         });
+        const key = "pullProgress";
+        this.setProgress(key, 2, `准备拉取 ${paths.length} 个路径…`);
 
         let target: FileSystemDirectoryHandle | undefined = dirHandle;
         let folderLabel = "";
@@ -315,11 +414,17 @@ class TestScriptStore {
             }
 
             const results: { name: string; blob: Blob }[] = [];
+            let done = 0;
             for (const p of paths) {
                 try {
                     runInAction(() => {
                         this.pullProgress = `正在拉取 ${p} …`;
                     });
+                    this.setProgress(
+                        key,
+                        Math.round((done / paths.length) * 100),
+                        `正在拉取 ${p} …（${done + 1}/${paths.length}）`,
+                    );
                     this.append(`拉取 ${p} …`);
                     const { blob, name } = await fs.pullPath(p, (stage) => {
                         runInAction(() => {
@@ -328,6 +433,12 @@ class TestScriptStore {
                     });
                     if (blob.size === 0) {
                         this.append("  ↳ 跳过（空或不存在）");
+                        done++;
+                        this.setProgress(
+                            key,
+                            Math.round((done / paths.length) * 100),
+                            `已跳过空目录（${done}/${paths.length}）`,
+                        );
                         continue;
                     }
                     if (target) {
@@ -352,10 +463,25 @@ class TestScriptStore {
                             "ok",
                         );
                     }
+                    done++;
+                    this.setProgress(
+                        key,
+                        Math.round((done / paths.length) * 100),
+                        `已完成 ${done}/${paths.length}`,
+                    );
                 } catch (e) {
+                    done++;
                     this.append(`  ↳ ${p} 拉取失败：${(e as Error).message}`, "err");
                 }
             }
+            this.setProgress(
+                key,
+                100,
+                `已完成（${paths.length} 个路径，成功 ${results.length} 个打包）`,
+                true,
+                true,
+            );
+            setTimeout(() => this.clearProgress(key), 4000);
             runInAction(() => {
                 this.pullProgress = "";
             });
@@ -452,7 +578,15 @@ class TestScriptStore {
         return ok;
     }
 
-    /** 后台执行 monkey 测试（结果写入设备 /sdcard/yx_log） */
+    /**
+     * 执行 monkey 测试。
+     *
+     * 两种模式：
+     *  - **前台（fg）**：用 shell 协议 pty 运行 `monkey`，**实时读取 stdout**
+     *    逐行追加到「Monkey 实时日志」，可保存/下载。
+     *  - **后台（bg）**：`monkey > 设备文件 2>&1 &`，不阻塞界面，
+     *    日志落在设备 /sdcard/yx_log/ 下，可稍后拉取。
+     */
     async runMonkey() {
         const adb = this.adb;
         if (!adb) {
@@ -461,30 +595,109 @@ class TestScriptStore {
         }
         if (this.monkeyRunning) return;
         const cmd = this.buildMonkeyCommand();
-        this.append("$ (后台) " + cmd);
+
+        runInAction(() => {
+            this.monkeyRunning = true;
+            this.monkeyFinished = false;
+            this.monkeyLiveLog = [`$ ${cmd}`, ""];
+        });
+
+        if (this.monkeyMode === "bg") {
+            await this.runMonkeyBackground(adb, cmd);
+        } else {
+            await this.runMonkeyForeground(adb, cmd);
+        }
+    }
+
+    /** 前台执行：流式读取 monkey 输出 */
+    private async runMonkeyForeground(adb: Adb, cmd: string) {
+        try {
+            // shell 协议 pty：命令以 { command: [cmd] } 传入，保留参数原样
+            const svc = adb.subprocess.shellProtocol;
+            const session =
+                svc && svc.isSupported
+                    ? await svc.pty({ command: [cmd] })
+                    : await adb.subprocess.noneProtocol.pty(cmd);
+            this.monkeyAbort = session as unknown as {
+                kill: () => Promise<void> | void;
+            };
+            this.append("Monkey 已启动（前台，实时输出）", "ok");
+
+            const reader = (
+                session.output as unknown as ReadableStream<Uint8Array>
+            ).getReader();
+            const decoder = new TextDecoder();
+            let buf = "";
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                let idx: number;
+                const fresh: string[] = [];
+                while ((idx = buf.indexOf("\n")) >= 0) {
+                    fresh.push(buf.slice(0, idx));
+                    buf = buf.slice(idx + 1);
+                }
+                if (fresh.length) {
+                    runInAction(() => {
+                        // 环形保留最近 4000 行，避免卡顿
+                        const next = this.monkeyLiveLog.concat(fresh);
+                        this.monkeyLiveLog =
+                            next.length > 4000 ? next.slice(next.length - 4000) : next;
+                    });
+                }
+            }
+            // 收尾：刷出残留
+            if (buf) {
+                runInAction(() => {
+                    this.monkeyLiveLog = [...this.monkeyLiveLog, buf];
+                });
+            }
+            let code = 0;
+            try {
+                code = Number(await session.exited) || 0;
+            } catch {
+                code = this.monkeyStoppedByUser ? 130 : 0;
+            }
+            this.append(
+                `Monkey 已结束（退出码 ${code}）`,
+                code === 0 ? "ok" : "info",
+            );
+        } catch (e) {
+            this.append(`Monkey 执行异常：${(e as Error).message}`, "err");
+        } finally {
+            this.monkeyAbort = undefined;
+            runInAction(() => {
+                this.monkeyRunning = false;
+                this.monkeyFinished = true;
+            });
+        }
+    }
+
+    /** 后台执行：写设备文件，不阻塞 */
+    private async runMonkeyBackground(adb: Adb, cmd: string) {
         try {
             const dir = "/sdcard/yx_log";
             await shell(adb, `mkdir -p ${dir}`).catch(() => "");
             const logName = `monkey_${timestampName().replace(/[-:]/g, "")}.log`;
-            const wrapped = `${cmd} > ${dir}/${logName} 2>&1 &`;
-            // 后台执行并立即返回；不等待命令结束
-            void adb.subprocess.noneProtocol
-                .pty(`sh -c ${q(wrapped)}`)
-                .catch(() => {
-                    /* 后台任务，忽略流结束 */
-                });
-            runInAction(() => {
-                this.monkeyRunning = true;
+            const full = `${dir}/${logName}`;
+            const wrapped = `${cmd} > ${full} 2>&1 &`;
+            this.monkeyLogFile = full;
+            void adb.subprocess.noneProtocol.pty(`sh -c ${q(wrapped)}`).catch(() => {
+                /* 后台任务，忽略流结束 */
             });
-            this.append(`Monkey 已在设备后台启动，日志：${dir}/${logName}`, "ok");
-            // 2 秒后确认进程确实起来了（自检兼容）
-            setTimeout(() => {
-                void this.verifyMonkeyRunning();
-            }, 2500);
+            this.append(`Monkey 已在设备后台启动，日志：${full}`, "ok");
+            // 2 秒后确认进程确实起来了
+            setTimeout(() => void this.verifyMonkeyRunning(), 2500);
+            runInAction(() => {
+                this.monkeyRunning = false;
+                this.monkeyFinished = true;
+            });
         } catch (e) {
             this.append(`Monkey 启动失败：${(e as Error).message}`, "err");
             runInAction(() => {
                 this.monkeyRunning = false;
+                this.monkeyFinished = true;
             });
         }
     }
@@ -497,17 +710,32 @@ class TestScriptStore {
             const out = await shell(adb, "ps -A -o NAME | grep -c monkey");
             const n = Number(out.trim().split("\n").pop()) || 0;
             if (n > 0) this.append("✓ 已确认 monkey 进程在设备上运行", "ok");
-            else this.append("⚠ 未检测到 monkey 进程，请检查包名是否存在于设备上（可先点「自检」）", "err");
+            else
+                this.append(
+                    "⚠ 未检测到 monkey 进程，请检查包名是否存在于设备上（可先点「自检」）",
+                    "err",
+                );
         } catch {
             /* 老设备可能不支持 ps -A，忽略 */
         }
     }
 
-    stopMonkey() {
+    /** 停止 Monkey：前台会 kill 掉设备端进程 */
+    async stopMonkey() {
+        this.monkeyStoppedByUser = true;
+        if (this.monkeyAbort) {
+            try {
+                await this.monkeyAbort.kill();
+            } catch {
+                /* ignore */
+            }
+            this.monkeyAbort = undefined;
+        }
         runInAction(() => {
             this.monkeyRunning = false;
+            this.monkeyFinished = true;
         });
-        this.append("已停止本地记录（设备端 monkey 需 kill 或重启终止）");
+        this.append("已停止 Monkey（若为前台模式，设备端进程已终止）");
     }
 
     /** 强杀设备上的 monkey 进程 */
@@ -516,11 +744,45 @@ class TestScriptStore {
             await this.exec("pkill -f monkey || killall monkey", "结束 monkey 进程");
             runInAction(() => {
                 this.monkeyRunning = false;
+                this.monkeyFinished = true;
             });
             this.append("已尝试结束设备上的 monkey 进程", "ok");
         } catch (e) {
             this.append(`结束失败：${(e as Error).message}`, "err");
         }
+    }
+
+    /** 保存 Monkey 实时日志到本地文件夹 */
+    async saveMonkeyLog(dirHandle?: FileSystemDirectoryHandle): Promise<boolean> {
+        if (this.monkeyLiveLog.length === 0) {
+            this.append("暂无 Monkey 日志可保存，请先运行", "err");
+            return false;
+        }
+        const text = this.monkeyLiveLog.join("\n");
+        const blob = new Blob([text + "\n"], { type: "text/plain;charset=utf-8" });
+        const name = `monkey_${timestampName().replace(/[-:]/g, "")}.log`;
+        try {
+            if (dirHandle) {
+                const handle = await dirHandle.getFileHandle(name, { create: true });
+                const w = await handle.createWritable();
+                await w.write(blob);
+                await w.close();
+                this.append(`Monkey 日志已保存到 ${dirHandle.name}/${name}`, "ok");
+            } else {
+                saveBlob(blob, name);
+                this.append(`Monkey 日志已下载：${name}`, "ok");
+            }
+            return true;
+        } catch (e) {
+            this.append(`保存失败：${(e as Error).message}`, "err");
+            return false;
+        }
+    }
+
+    /** 清空 Monkey 实时日志 */
+    clearMonkeyLog() {
+        this.monkeyLiveLog = [];
+        this.monkeyFinished = false;
     }
 
     /* ================= 蓝牙 HCI ================= */
@@ -538,9 +800,11 @@ class TestScriptStore {
         }
     }
 
-    /** 导出 HCI 日志到本地 */
+    /** 导出 HCI 日志到本地（带进度） */
     async exportHci(dirHandle?: FileSystemDirectoryHandle) {
+        const key = "hciExport";
         try {
+            this.setProgress(key, 5, "正在读取 HCI 日志…");
             runInAction(() => {
                 this.hciExportProgress = "正在读取 HCI 日志 …";
             });
@@ -548,23 +812,32 @@ class TestScriptStore {
                 runInAction(() => {
                     this.hciExportProgress = `正在拉取 ${stage}`;
                 });
+                this.setProgress(key, 45, `正在拉取 ${stage}`);
             });
             if (blob.size === 0) {
+                this.setProgress(key, 100, "日志为空或不存在", true, false);
                 this.append("HCI 日志为空或不存在", "err");
+                setTimeout(() => this.clearProgress(key), 5000);
                 return;
             }
+            this.setProgress(key, 80, "正在写入文件…");
             if (dirHandle) {
                 const handle = await dirHandle.getFileHandle(name, { create: true });
                 const w = await handle.createWritable();
                 await w.write(blob);
                 await w.close();
+                this.setProgress(key, 100, `已保存 ${dirHandle.name}/${name}`, true, true);
                 this.append(`HCI 日志已保存到 ${dirHandle.name}/${name}`, "ok");
             } else {
                 saveBlob(blob, name);
+                this.setProgress(key, 100, `已下载 ${name}`, true, true);
                 this.append(`HCI 日志已下载：${name}`, "ok");
             }
+            setTimeout(() => this.clearProgress(key), 4000);
         } catch (e) {
+            this.setProgress(key, 100, `失败：${(e as Error).message}`, true, false);
             this.append(`导出失败：${(e as Error).message}`, "err");
+            setTimeout(() => this.clearProgress(key), 6000);
         } finally {
             runInAction(() => {
                 this.hciExportProgress = "";
@@ -572,85 +845,158 @@ class TestScriptStore {
         }
     }
 
-    /** 删除 HCI 日志 */
+    /** 删除 HCI 日志（带反馈） */
     async removeHci() {
+        const key = "hciRemove";
         try {
+            this.setProgress(key, 30, "正在删除…");
             await this.exec(`rm -rf ${q(HCI_LOG_DIR + "/")}`, "删除 HCI 日志");
+            this.setProgress(key, 100, "已删除", true, true);
             this.append("HCI 日志已删除", "ok");
+            setTimeout(() => this.clearProgress(key), 4000);
         } catch (e) {
+            this.setProgress(key, 100, `失败：${(e as Error).message}`, true, false);
             this.append(`删除失败：${(e as Error).message}`, "err");
+            setTimeout(() => this.clearProgress(key), 6000);
         }
     }
 
     /* ================= CPU / 内存监控 ================= */
 
-    /** 采样一次 CPU 与内存占用 */
+    /** 当前采样点数量（用于 UI） */
+    get monitorSampleCount(): number {
+        return this.cpuHistory.length;
+    }
+
+    /** 已采集时长（秒） */
+    get monitorDurationSec(): number {
+        if (!this.monitorStartedAt) return 0;
+        return Math.floor((Date.now() - this.monitorStartedAt) / 1000);
+    }
+
+    /**
+     * 采样一次 CPU 与内存占用。
+     *
+     * ⚠️ 关键：必须取**设备真实系统数据**：
+     *  - CPU：`/proc/stat` 两次采样求差（比 dumpsys cpuinfo 更准且通用），
+     *         同时保留 `dumpsys cpuinfo` 的 TOTAL 作为参考。
+     *  - 内存：`/proc/meminfo` 的 MemTotal / MemAvailable，
+     *         占用 = (Total - Available) / Total。
+     */
     async sampleOnce() {
         const adb = this.adb;
         if (!adb) throw new Error("未连接设备");
         const now = new Date();
         const pad = (n: number) => String(n).padStart(2, "0");
-        const stamp =
-            `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
-            `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        const stamp = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(
+            now.getSeconds(),
+        )}`;
 
-        // CPU
+        // ---- CPU：用 /proc/stat 两次差值计算（真实系统占用） ----
+        let cpuVal: number | null = null;
         try {
-            const cpu = await shell(adb, "dumpsys cpuinfo");
-            const lines = cpu.split("\n").filter((l) => l.trim());
-            const text = lines.slice(0, 6).join("\n");
-            const total = cpu.match(/([\d.]+)%\s+TOTAL/i);
-            const cpuVal = total ? Number(total[1]) : null;
-            runInAction(() => {
-                this.cpuSample = text;
-                if (cpuVal !== null) {
-                    this.cpuHistory = [...this.cpuHistory.slice(-59), cpuVal];
-                }
-            });
-        } catch (e) {
-            this.append(`CPU 采样失败：${(e as Error).message}`, "err");
+            const readStat = async () => {
+                const s = await shell(adb, "cat /proc/stat | head -1");
+                const nums = s
+                    .trim()
+                    .replace(/^cpu\s+/, "")
+                    .split(/\s+/)
+                    .map(Number);
+                const total = nums.reduce((a, b) => a + (isNaN(b) ? 0 : b), 0);
+                const idle = (nums[3] || 0) + (nums[4] || 0);
+                return { total, idle };
+            };
+            const a = await readStat();
+            await new Promise((r) => setTimeout(r, 300));
+            const b = await readStat();
+            const dt = b.total - a.total;
+            const di = b.idle - a.idle;
+            if (dt > 0) cpuVal = Number((((dt - di) / dt) * 100).toFixed(1));
+        } catch {
+            /* 退化到 dumpsys */
         }
-        // 内存
-        try {
-            const mem = await shell(adb, "dumpsys meminfo");
-            const want = ["Total RAM", "Free RAM", "Used RAM", "Lost RAM", "ZRAM"];
-            const lines = mem
-                .split("\n")
-                .map((l) => l.trim())
-                .filter((l) => want.some((w) => l.startsWith(w)));
-            const text = lines.join("\n");
-            const totalKb = mem.match(/Total RAM:\s*(\d+)/i);
-            const freeKb = mem.match(/Free RAM:\s*(\d+)/i);
-            let memVal: number | null = null;
-            if (totalKb && freeKb) {
-                memVal =
-                    ((Number(totalKb[1]) - Number(freeKb[1])) / Number(totalKb[1])) * 100;
+        if (cpuVal === null) {
+            try {
+                const cpu = await shell(adb, "dumpsys cpuinfo");
+                const total = cpu.match(/([\d.]+)%\s+TOTAL/i);
+                if (total) cpuVal = Number(total[1]);
+                runInAction(() => {
+                    this.cpuSample = cpu.split("\n").slice(0, 6).join("\n");
+                });
+            } catch (e) {
+                this.append(`CPU 采样失败：${(e as Error).message}`, "err");
             }
+        } else {
             runInAction(() => {
-                this.memSample = text || mem.split("\n").slice(0, 5).join("\n");
-                if (memVal !== null) {
-                    this.memHistory = [
-                        ...this.memHistory.slice(-59),
-                        Number(memVal.toFixed(1)),
-                    ];
-                }
+                this.cpuSample = `CPU 总占用：${cpuVal}%（/proc/stat 实时计算）`;
             });
+        }
+
+        // ---- 内存：/proc/meminfo（真实系统占用） ----
+        let memVal: number | null = null;
+        let memText = "";
+        try {
+            const mem = await shell(adb, "cat /proc/meminfo");
+            const pick = (key: string) => {
+                const m = mem.match(new RegExp(`^${key}:\\s*(\\d+)`, "m"));
+                return m ? Number(m[1]) : 0;
+            };
+            const total = pick("MemTotal");
+            const avail = pick("MemAvailable") || pick("MemFree");
+            const free = pick("MemFree");
+            const buffCache = pick("Buffers") + pick("Cached");
+            if (total > 0) {
+                const used = total - avail;
+                memVal = Number(((used / total) * 100).toFixed(1));
+                const mb = (kb: number) => (kb / 1024).toFixed(0);
+                memText =
+                    `MemTotal: ${mb(total)} MB\n` +
+                    `MemAvailable: ${mb(avail)} MB\n` +
+                    `MemFree: ${mb(free)} MB\n` +
+                    `Buffers+Cached: ${mb(buffCache)} MB\n` +
+                    `已用: ${mb(used)} MB（${memVal}%）`;
+            }
         } catch (e) {
             this.append(`内存采样失败：${(e as Error).message}`, "err");
         }
+        // 退化：dumpsys meminfo（注意真机数字带千位逗号，如 "7,285,016K"，需先去掉逗号）
+        if (memVal === null) {
+            try {
+                const mem = await shell(adb, "dumpsys meminfo");
+                const num = (re: RegExp) => {
+                    const m = mem.match(re);
+                    if (!m) return 0;
+                    return Number(m[1]!.replace(/,/g, "")) || 0;
+                };
+                const totalKb = num(/Total RAM:\s*([\d,]+)/i);
+                // Used RAM 比 Free RAM 更直接：已用/总量
+                const usedKb = num(/Used RAM:\s*([\d,]+)/i);
+                const freeKb = num(/Free RAM:\s*([\d,]+)/i);
+                const denom = totalKb;
+                const numerator = usedKb || totalKb - freeKb;
+                if (denom > 0 && numerator > 0) {
+                    memVal = Number(((numerator / denom) * 100).toFixed(1));
+                    memText = mem.split("\n").slice(0, 7).join("\n");
+                }
+            } catch {
+                /* ignore */
+            }
+        }
 
-        // 记录到监控日志（用于导出）
         runInAction(() => {
             this.lastSampleAt = stamp;
-            const c = this.cpuHistory.length
-                ? this.cpuHistory[this.cpuHistory.length - 1]
-                : "";
-            const m = this.memHistory.length
-                ? this.memHistory[this.memHistory.length - 1]
-                : "";
+            this.memSample = memText;
+            const MAXP = 3600; // 最多保留 1 小时（10s 一点）
+            if (cpuVal !== null) {
+                this.cpuHistory = [...this.cpuHistory, cpuVal].slice(-MAXP);
+            }
+            if (memVal !== null) {
+                this.memHistory = [...this.memHistory, memVal].slice(-MAXP);
+            }
+            this.sampleTimes = [...this.sampleTimes, stamp].slice(-MAXP);
             this.monitorLog = [
                 ...this.monitorLog.slice(-4999),
-                `${stamp}\tCPU%\t${c}\tMEM%\t${m}`,
+                `${stamp},${cpuVal ?? ""},${memVal ?? ""}`,
             ];
         });
     }
@@ -661,9 +1007,12 @@ class TestScriptStore {
             this.monitoring = true;
             this.cpuHistory = [];
             this.memHistory = [];
+            this.sampleTimes = [];
             this.monitorLog = [];
+            this.leakResult = undefined;
+            this.monitorStartedAt = Date.now();
         });
-        this.append(`开始监控（间隔 ${this.monitorIntervalSec}s）`, "ok");
+        this.append(`开始监控（间隔 ${this.monitorIntervalSec}s，采集设备真实数据）`, "ok");
         await this.sampleOnce().catch(() => "");
         this.monitorTimer = setInterval(
             () => void this.sampleOnce(),
@@ -679,34 +1028,122 @@ class TestScriptStore {
         runInAction(() => {
             this.monitoring = false;
         });
-        this.append("已停止监控");
+        this.append(`已停止监控，共采集 ${this.cpuHistory.length} 个点`);
     }
 
-    /** 导出监控记录到本地文件夹（CSV） */
+    /**
+     * 内存泄露检测：对整个采集时段的内存序列做**线性回归**，
+     * 用斜率（每分钟增长 %）+ R² 判定是否存在持续增长（泄露特征）。
+     */
+    detectLeak() {
+        const ys = this.memHistory;
+        const n = ys.length;
+        if (n < 5) {
+            runInAction(() => {
+                this.leakResult = undefined;
+            });
+            this.append("采样点不足，至少需要 5 个点才能检测内存泄露", "err");
+            return;
+        }
+        const xs = ys.map((_, i) => i);
+        const meanX = xs.reduce((a, b) => a + b, 0) / n;
+        const meanY = ys.reduce((a, b) => a + b, 0) / n;
+        let num = 0;
+        let den = 0;
+        for (let i = 0; i < n; i++) {
+            num += (xs[i]! - meanX) * (ys[i]! - meanY);
+            den += (xs[i]! - meanX) ** 2;
+        }
+        const slope = den === 0 ? 0 : num / den; // 每采样点增长 %
+        let ssRes = 0;
+        let ssTot = 0;
+        for (let i = 0; i < n; i++) {
+            const pred = meanY + slope * (xs[i]! - meanX);
+            ssRes += (ys[i]! - pred) ** 2;
+            ssTot += (ys[i]! - meanY) ** 2;
+        }
+        const r2 = ssTot === 0 ? 1 : 1 - ssRes / ssTot;
+        const stepSec = Math.max(2, this.monitorIntervalSec);
+        const growthPerMin = slope * (60 / stepSec); // %/分钟
+        const growth = ys[n - 1]! - ys[0]!;
+
+        // 判定：持续上升 + 拟合良好 → 疑似泄露
+        let level: "none" | "slight" | "likely" = "none";
+        if (slope > 0 && r2 > 0.6) {
+            if (growthPerMin >= 0.8) level = "likely";
+            else if (growthPerMin >= 0.2) level = "slight";
+        } else if (growthPerMin >= 1.5) {
+            level = "likely";
+        }
+
+        const detail = [
+            `采样点：${n} 个（约 ${(n * stepSec) / 60} 分钟）`,
+            `起始内存占用：${ys[0]!.toFixed(1)}%`,
+            `结束内存占用：${ys[n - 1]!.toFixed(1)}%`,
+            `总增长：${growth >= 0 ? "+" : ""}${growth.toFixed(1)}%`,
+            `增长速率：${growthPerMin >= 0 ? "+" : ""}${growthPerMin.toFixed(2)}%/分钟`,
+            `线性拟合 R²：${r2.toFixed(3)}（越接近 1 表示越接近持续线性增长）`,
+        ].join("\n");
+
+        runInAction(() => {
+            this.leakResult = {
+                level,
+                startMem: ys[0]!,
+                endMem: ys[n - 1]!,
+                growth,
+                growthPerMin,
+                r2,
+                detail,
+            };
+        });
+        const label =
+            level === "likely"
+                ? "疑似内存泄露"
+                : level === "slight"
+                  ? "轻微内存增长"
+                  : "未发现明显内存泄露";
+        this.append(
+            `内存泄露检测完成：${label}（增长 ${growth >= 0 ? "+" : ""}${growth.toFixed(
+                1,
+            )}%，${growthPerMin.toFixed(2)}%/分钟，R²=${r2.toFixed(2)}）`,
+            level === "likely" ? "err" : level === "slight" ? "info" : "ok",
+        );
+    }
+
+    /** 导出监控记录到本地文件夹（CSV，带进度反馈） */
     async exportMonitor(dirHandle?: FileSystemDirectoryHandle): Promise<boolean> {
         if (this.monitorLog.length === 0) {
             this.append("暂无监控数据可导出，请先开始监控", "err");
             return false;
         }
-        const header = "时间\tCPU占用%\t内存占用%";
-        const body = this.monitorLog.map((l) => l.replace(/\tCPU%\t/, "\t").replace(/\tMEM%\t/, "\t"));
-        const text = [header, ...body].join("\n");
-        const blob = new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8" });
-        const name = `monitor_${timestampName().replace(/[-:]/g, "")}.csv`;
+        const key = "monitorExport";
+        this.setProgress(key, 5, "准备数据…");
         try {
+            const header = "时间,CPU占用%,内存占用%";
+            const text = [header, ...this.monitorLog].join("\n");
+            const blob = new Blob(["\ufeff" + text], {
+                type: "text/csv;charset=utf-8",
+            });
+            const name = `monitor_${timestampName().replace(/[-:]/g, "")}.csv`;
+            this.setProgress(key, 40, "写入文件…");
             if (dirHandle) {
                 const handle = await dirHandle.getFileHandle(name, { create: true });
                 const w = await handle.createWritable();
                 await w.write(blob);
                 await w.close();
+                this.setProgress(key, 100, `已保存 ${dirHandle.name}/${name}`, true, true);
                 this.append(`监控记录已保存到 ${dirHandle.name}/${name}`, "ok");
             } else {
                 saveBlob(blob, name);
+                this.setProgress(key, 100, `已下载 ${name}`, true, true);
                 this.append(`监控记录已下载：${name}`, "ok");
             }
+            setTimeout(() => this.clearProgress(key), 4000);
             return true;
         } catch (e) {
+            this.setProgress(key, 100, `失败：${(e as Error).message}`, true, false);
             this.append(`导出失败：${(e as Error).message}`, "err");
+            setTimeout(() => this.clearProgress(key), 5000);
             return false;
         }
     }
@@ -805,15 +1242,57 @@ class TestScriptStore {
         }
     }
 
-    /** 进入应用详情界面（系统设置里的该应用页面） */
-    async openAppInfo(pkg: string) {
+    /**
+     * 打开（启动）应用 —— 与「启动应用」的区别：本方法优先用
+     * `am start` 直接拉起 Launcher Activity（更接近"打开应用"），
+     * 失败时退回 `monkey -c LAUNCHER 1`（无需知道 Activity 名）。
+     */
+    async openApp(pkg: string) {
         if (!pkg) return;
+        const adb = this.adb;
+        if (!adb) {
+            this.append("打开失败：未连接设备", "err");
+            return;
+        }
         try {
-            await this.exec(
-                `am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:${pkg}`,
-                `进入 ${pkg} 应用界面`,
-            );
-            this.append(`已打开 ${pkg} 的应用详情界面`, "ok");
+            this.append(`$ 打开应用 ${pkg}`);
+            // ① 解析 Launcher Activity
+            let activity = "";
+            try {
+                const resolved = await shell(
+                    adb,
+                    `cmd package resolve-activity --brief -c android.intent.category.LAUNCHER ${pkg}`,
+                );
+                const lines = resolved
+                    .split("\n")
+                    .map((l) => l.trim())
+                    .filter(Boolean);
+                const last = lines[lines.length - 1] || "";
+                if (last.includes("/")) activity = last;
+            } catch {
+                /* 老设备可能无 cmd package resolve-activity */
+            }
+            let out = "";
+            if (activity) {
+                out = await this.exec(
+                    `am start -n ${activity}`,
+                    `am start -n ${activity}`,
+                );
+            } else {
+                out = await this.exec(
+                    `monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`,
+                    `monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`,
+                );
+            }
+            if (
+                /\bEvents injected: 1\b/i.test(out) ||
+                /Starting:\s*Intent/i.test(out) ||
+                !/No activities found|Error/i.test(out)
+            ) {
+                this.append(`已打开应用 ${pkg}`, "ok");
+            } else {
+                this.append(`打开 ${pkg} 失败：未找到启动入口`, "err");
+            }
         } catch (e) {
             this.append(`打开失败：${(e as Error).message}`, "err");
         }
@@ -830,12 +1309,14 @@ class TestScriptStore {
         }
     }
 
-    /** 把当前应用包名列表导出为 txt */
+    /** 把当前应用包名列表导出为 txt（带进度反馈） */
     async exportAppList(dirHandle?: FileSystemDirectoryHandle): Promise<boolean> {
         if (this.apps.length === 0) {
             this.append("应用列表为空，请先「列出应用」", "err");
             return false;
         }
+        const key = "appListExport";
+        this.setProgress(key, 30, "正在生成清单…");
         const text = this.apps.map((a) => a.package).join("\n");
         const blob = new Blob([text + "\n"], { type: "text/plain;charset=utf-8" });
         const name = `packages_${timestampName().replace(/[-:]/g, "")}.txt`;
@@ -845,14 +1326,19 @@ class TestScriptStore {
                 const w = await handle.createWritable();
                 await w.write(blob);
                 await w.close();
+                this.setProgress(key, 100, `已保存 ${dirHandle.name}/${name}`, true, true);
                 this.append(`包名清单已保存到 ${dirHandle.name}/${name}`, "ok");
             } else {
                 saveBlob(blob, name);
+                this.setProgress(key, 100, `已下载 ${name}`, true, true);
                 this.append(`包名清单已下载：${name}`, "ok");
             }
+            setTimeout(() => this.clearProgress(key), 4000);
             return true;
         } catch (e) {
+            this.setProgress(key, 100, `失败：${(e as Error).message}`, true, false);
             this.append(`导出失败：${(e as Error).message}`, "err");
+            setTimeout(() => this.clearProgress(key), 6000);
             return false;
         }
     }
