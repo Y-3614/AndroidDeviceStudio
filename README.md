@@ -37,18 +37,54 @@ adb kill-server
 
 | 页面 | 能力 |
 | --- | --- |
-| 说明 | 使用说明 + 连接诊断面板（逐条执行基础命令并显示真实返回） |
+| 说明 | 可折叠目录 + 各功能详解 + 连接诊断面板（逐条执行基础命令并显示真实返回） |
 | 设备信息 | 读取型号、Android 版本、SDK、ABI、Build 类型等属性 |
 | 文件管理 | 浏览 / 上传（含整个文件夹）/ 下载（目录自动打包 zip）/ 删除 / 新建文件夹 |
 | 权限与挂载 | `adb root` / `adb unroot` / `adb remount` / `disable-verity`，带依赖联锁 |
-| 电源与 WiFi | 重启 / Recovery / Bootloader / 关机 / 息屏 / 唤醒 / 锁屏；ADB over WiFi（tcpip 端口 + 设备 IP） |
+| 电源菜单 | 重启 / Recovery / Bootloader / 关机 / 息屏 / 唤醒 / 锁屏 / 电源菜单 |
+| WiFi ADB | 开启 tcpip 端口 + 读取设备 IP（实际连接在本机 `adb connect`） |
 | 终端 | 基于 xterm.js 的交互式 shell，支持 root 会话切换 |
-| 投屏 | 基于 framebuffer 的实时画面 + 常用导航/电源键 + 录制为 WebM |
+| **命令大全** | 内置 **100 条真实可用命令**（分类、不可删）+ 用户自定义（可增删改，**云端共享**） |
+| 投屏 | scrcpy 实时流 + 触摸/导航/电源键 + 录制 MP4 |
 | 屏幕截图 | 抓取当前屏幕并下载为 PNG |
 | 日志 Logcat | 实时日志、等级开关、应用/关键字/标签过滤、本地文件夹落盘（20MB 分片） |
-| 安装 APK | 推送至 `/data/local/tmp` 并安装，显示进度与失败原因提示 |
+| TEST 脚本 | 日志采集拉取、Monkey、蓝牙 HCI、CPU/内存监控、应用管理（均可配置） |
+| 安装 APK | 推送并安装，可选安装路径，显示进度与失败原因提示 |
 
 顶栏提供**中英文切换**（选择持久化到 localStorage）。默认打开「说明」页。
+
+## ADB 命令大全（内置 100 条 + 云端共享自定义）
+
+「命令大全」页提供 **100 条真实可用的 ADB 命令**，按分类整理：
+
+| 分类 | 条数 | 分类 | 条数 |
+| --- | --- | --- | --- |
+| 设备与连接 | 9 | 性能与监控 | 8 |
+| 设备信息 | 8 | 输入与界面 | 8 |
+| 应用管理 | 9 | 电源与重启 | 6 |
+| 安装与卸载 | 7 | 网络与端口 | 8 |
+| 启动与停止 | 6 | 屏幕与录制 | 6 |
+| 文件操作 | 9 | 系统与权限 | 8 |
+| 日志与调试 | 8 | | |
+
+### 规则
+
+- **内置命令不可删除、不可修改**（列表里带 🔒 标志）。
+- 每条支持**一键复制**，连接设备后还可**一键执行**（自动去掉 `adb` / `adb shell` 前缀）。
+- 用户可在此基础上**新增自定义命令**，并**修改 / 删除自己创建的**命令。
+
+### 跨用户共享（云服务）
+
+- 自定义命令保存在**云端**（WorkBuddy 云服务数据库表 `adb_commands`），
+  **所有打开本网站的人都能看到**彼此新增的命令。
+- 仅「自己这个浏览器创建的」命令显示编辑 / 删除按钮（依据本机 `client_id`）；
+  他人创建的命令在界面上只读。
+- 云端不可用时（断网 / 服务异常）自动**降级为本地 localStorage**，页面顶部会**明确提示**，
+  不会让用户误以为已共享；网络恢复后点「刷新云端」重新同步。
+- 支持 **导出 / 导入 JSON**，便于把命令集分享给未接入云端的同事。
+
+> 云服务配置（`endpoint` / `publishableKey` / `oauthRelayBaseUrl`）位于 `src/state/cloud.ts`，
+> 均为可安全公开的前端配置；数据库权限由服务端 RLS 策略约束。
 
 ## 日志 Logcat 说明
 
@@ -94,35 +130,46 @@ disable-verity → 重启设备 → adb root → adb remount
 ## 技术栈
 
 - **Vite + React 18 + TypeScript**
-- **Fluent UI v8**（`@fluentui/react`）
-- **MobX** —— 连接状态、文件列表、提权状态、日志等响应式状态
+- **Fluent UI v8**（`@fluentui/react`；图标字体**本地打包**，不依赖微软 CDN）
+- **MobX** —— 连接状态、文件列表、提权状态、日志、命令等响应式状态
 - **@yume-chan/adb v2** —— 纯前端 ADB 协议栈
+- **@yume-chan/adb-scrcpy** + WebCodecs / TinyH264 —— 投屏与录制
 - **@xterm/xterm** —— 终端
 - **fflate** —— 目录 zip 打包（按需分包加载）
+- **mp4-muxer** —— 把 H.264 流直接封装为标准 MP4
+- **@tencent-ai/workbuddy-cloud-sdk** —— 命令大全的云端共享存储
 
 ## 目录结构
 
 ```
 src/
   state/
-    connection.ts   # ADB 连接与认证握手（WebUSB）+ 错误中文化
-    privilege.ts    # 三级提权探测 + root/unroot/remount/disable-verity
-    fs.ts           # 文件系统操作（sync / su 双通道）
-    framebuffer.ts  # 截图与投屏共用的像素解码（RGBA）
-    logcat.ts       # Logcat 状态 + 解析 + 本地落盘
-    i18n.ts         # 中英文文案
-    router.ts       # 哈希路由
+    connection.ts     # ADB 连接与认证握手（WebUSB）+ 错误中文化
+    privilege.ts      # 三级提权探测 + root/unroot/remount/disable-verity
+    fs.ts             # 文件系统操作（sync / su 双通道）
+    framebuffer.ts    # 截图与投屏共用的像素解码（RGBA）
+    logcat.ts         # Logcat 状态 + 解析 + 本地落盘
+    recorder.ts       # scrcpy H.264 流 → 标准 MP4（mp4-muxer）
+    scrcpy-server.ts  # scrcpy 服务端二进制加载与推送
+    adb-commands.ts   # 内置 100 条命令数据
+    commands-store.ts # 命令大全 store（云端优先 + 本地降级）
+    cloud.ts          # 云服务客户端初始化与 publicConfig
+    testscript.ts     # TEST 脚本页状态（配置持久化）
+    i18n.ts           # 中英文文案
+    router.ts         # 哈希路由
   components/
-    Connect.tsx     # 设备连接面板
-    Nav.tsx         # 左侧导航
-    Diagnostics.tsx # 连接诊断
-  pages/            # 各功能页面
+    Connect.tsx       # 设备连接面板
+    Nav.tsx           # 左侧导航
+    Diagnostics.tsx   # 连接诊断
+  pages/              # 各功能页面
+docs/
+  用户手册.md          # 面向使用者的详细手册
 ```
 
 ## 已知限制
 
-- 投屏采用 framebuffer 轮询方案，帧率受设备抓帧速度限制（通常 5–15 fps）；
-  未接入 scrcpy 高帧率方案。
 - 浏览器出于安全限制无法直接建立 TCP 连接，因此 ADB over WiFi 仅提供
   「开启 tcpip + 读取设备 IP」，实际连接需在本机命令行用 `adb connect`。
-- `base64` 通道大文件下载较慢；超大文件建议在非 `su` 模式下用原生 sync。
+- 投屏依赖设备端 scrcpy-server（已随站点打包，v3.3.3）；部分设备 H.264 编码
+  profile 与软解不兼容时，可在投屏页切换解码器（默认软解兼容性最好）。
+- `su` 模式下大文件下载走 `base64` 通道会较慢；`adb root` 模式下走原生 sync 更快。

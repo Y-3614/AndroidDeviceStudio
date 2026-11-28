@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Connect } from "./components/Connect";
 import { Nav } from "./components/Nav";
 import { i18n } from "./state/i18n";
+import { CommandsPage } from "./pages/Commands";
 import { DeviceInfoPage } from "./pages/DeviceInfo";
 import { FileManagerPage } from "./pages/FileManager";
 import { InstallPage } from "./pages/Install";
@@ -61,6 +62,9 @@ export const App = observer(function App() {
             break;
         case "test-script":
             page = <TestScriptPage />;
+            break;
+        case "commands":
+            page = <CommandsPage />;
             break;
         case "install":
             page = <InstallPage />;

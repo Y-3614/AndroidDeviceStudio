@@ -22,6 +22,7 @@ const ROUTES: RouteDef[] = [
     { key: "power", icon: "PowerButton", labelKey: "power" },
     { key: "wifi-adb", icon: "NetworkTower", labelKey: "wifiAdb" },
     { key: "terminal", icon: "CommandPrompt", labelKey: "terminal" },
+    { key: "commands", icon: "Library", labelKey: "commands" },
     { key: "mirror", icon: "Devices2", labelKey: "mirror" },
     { key: "screen-capture", icon: "Camera", labelKey: "screenCapture" },
     { key: "logcat", icon: "Articles", labelKey: "logcat" },
