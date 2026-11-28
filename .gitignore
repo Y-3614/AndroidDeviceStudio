@@ -30,3 +30,6 @@ vite.config.ts.timestamp-*.mjs
 
 # TS 增量编译缓存
 *.tsbuildinfo
+
+# 部署产物目录（由 dist 拷贝而来，不入库）
+deploy
